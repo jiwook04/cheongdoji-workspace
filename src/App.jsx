@@ -212,8 +212,7 @@ const fields = {
 };
 
 function App() {
-  const [session, setSession] = useState(null);
-  const [page, setPage] = useState('dashboard');
+const [page, setPage] = useState('dashboard');
   const [rows, setRows] = useState({
     participants: [],
     schedules: [],
@@ -229,20 +228,11 @@ function App() {
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState({});
   const [editing, setEditing] = useState(null);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPass, setAuthPass] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
   const [month, setMonth] = useState(new Date());
 
-  useEffect(() => {
-    if (!supabase) return;
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => subscription.unsubscribe();
-  }, []);
-
   const loadSettings = async () => {
-    if (!supabase || !session) return;
+    if (!supabase) return;
     const { data, error: settingsError } = await supabase
       .from('site_settings')
       .select('*')
@@ -261,7 +251,7 @@ function App() {
   };
 
   const load = async () => {
-    if (!supabase || !session) return;
+    if (!supabase) return;
     setLoading(true);
     setError('');
     const names = ['participants', 'schedules', 'attendance', 'consultations', 'followups'];
@@ -294,10 +284,10 @@ function App() {
 
   useEffect(() => {
     load();
-  }, [session]);
+  }, []);
 
   useEffect(() => {
-    if (!supabase || !session) return;
+    if (!supabase) return;
     const ch = supabase
       .channel('workspace-live')
       .on('postgres_changes', { event: '*', schema: 'public' }, () => load())
@@ -305,10 +295,10 @@ function App() {
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [session]);
+  }, []);
 
   const saveSettings = async (nextConfig) => {
-    if (!supabase || !session) return;
+    if (!supabase) return;
     setError('');
     setSavedNotice('');
     const payload = {
@@ -326,15 +316,6 @@ function App() {
     setSiteConfig(payload);
     setSavedNotice('설정이 저장되었습니다.');
   };
-
-  const signIn = async (e) => {
-    e.preventDefault();
-    setError('');
-    const { error: authError } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass });
-    if (authError) setError(authError.message);
-  };
-
-  const signOut = () => supabase.auth.signOut();
 
   const openNew = () => {
     setEditing(null);
@@ -409,46 +390,6 @@ function App() {
 
   if (!supabase) return <SetupScreen />;
 
-  if (!session) {
-    return (
-      <div className="auth">
-        <div className="auth-card">
-          <div className="brand-mark">청</div>
-          <p className="eyebrow">JEONBUK YOUTH CHALLENGE</p>
-          <h1>{siteConfig.brand_title || '청도지 WORKSPACE'}</h1>
-          <p className="muted">사업단의 일정과 참여자, 상담 및 성과를 한곳에서 관리하세요.</p>
-          <form onSubmit={signIn}>
-            <label>
-              이메일
-              <input
-                type="email"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                required
-                placeholder="team@example.com"
-              />
-            </label>
-            <label>
-              비밀번호
-              <input
-                type="password"
-                value={authPass}
-                onChange={(e) => setAuthPass(e.target.value)}
-                required
-                minLength="6"
-                placeholder="비밀번호"
-              />
-            </label>
-            <button className="primary full">로그인</button>
-          </form>
-          <p className="link-button">새 팀원은 관리자에게 초대를 요청해 주세요.</p>
-          {error && <p className="error">{error}</p>}
-          <p className="tiny muted">관리자가 초대한 팀원 계정으로 로그인하세요.</p>
-        </div>
-      </div>
-    );
-  }
-
   const rawNavItem = nav.find((n) => n[0] === page);
   const pageTitle = rawNavItem ? getMenuLabel(rawNavItem[0], rawNavItem[1]) : '대시보드';
 
@@ -486,14 +427,11 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="user-chip">
-            <div className="avatar">{session.user.email?.[0]?.toUpperCase()}</div>
+            <div className="avatar">청</div>
             <div className="user-info">
-              <b>{session.user.email?.split('@')[0]}</b>
-              <small>팀원 계정</small>
+              <b>공용 워크스페이스</b>
+              <small>바로 접속 모드</small>
             </div>
-            <button title="로그아웃" onClick={signOut}>
-              <LogOut size={16} />
-            </button>
           </div>
           <div className="version">CHEONGDOJI · 2026</div>
         </div>
@@ -514,7 +452,7 @@ function App() {
             <button className="icon-btn" onClick={load} title="새로고침">
               <RefreshCw size={17} />
             </button>
-            <div className="avatar">{session.user.email?.[0]?.toUpperCase()}</div>
+            <div className="avatar">청</div>
           </div>
         </header>
 
