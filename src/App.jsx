@@ -8,7 +8,6 @@ import {
   MessageSquareText,
   GraduationCap,
   ChartNoAxesCombined,
-  LogOut,
   Plus,
   Search,
   RefreshCw,
@@ -17,14 +16,15 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
-  MapPin,
   UserRound,
+  UserCheck,
   Settings,
   AlertCircle,
   Megaphone,
   Pin,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Trash2
 } from 'lucide-react';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
@@ -38,9 +38,85 @@ const nav = [
   ['attendance', '출결 관리', ClipboardCheck],
   ['consultations', '상담 관리', MessageSquareText],
   ['followups', '사후관리', GraduationCap],
+  ['managers', '담당자 관리', UserCheck],
   ['stats', '성과 통계', ChartNoAxesCombined],
   ['settings', '사이트 설정', Settings]
 ];
+
+const SCHEDULE_CATEGORIES = ['프로그램', '사후관리', '행사', '기타'];
+
+const CATEGORY_STYLES = {
+  '프로그램': {
+    bg: '#eef4ff',
+    border: '#60a5fa',
+    text: '#1d4ed8',
+    badgeBg: '#dbeafe',
+    badgeText: '#1e40af'
+  },
+  '사후관리': {
+    bg: '#ecfdf5',
+    border: '#34d399',
+    text: '#047857',
+    badgeBg: '#d1fae5',
+    badgeText: '#065f46'
+  },
+  '행사': {
+    bg: '#fff7ed',
+    border: '#fb923c',
+    text: '#c2410c',
+    badgeBg: '#ffedd5',
+    badgeText: '#9a3412'
+  },
+  '기타': {
+    bg: '#f3f4f6',
+    border: '#9ca3af',
+    text: '#374151',
+    badgeBg: '#e5e7eb',
+    badgeText: '#1f2937'
+  }
+};
+
+const getCategoryStyle = (category) =>
+  CATEGORY_STYLES[category] || CATEGORY_STYLES['기타'];
+
+const HALF_HOUR_TIMES = Array.from({ length: 48 }, (_, idx) => {
+  const h = String(Math.floor(idx / 2)).padStart(2, '0');
+  const m = idx % 2 === 0 ? '00' : '30';
+  return `${h}:${m}`;
+});
+
+const snapToHalfHour = (timeStr) => {
+  if (!timeStr || !/^\d{2}:\d{2}$/.test(timeStr)) return '09:00';
+  const [hh, mm] = timeStr.split(':').map(Number);
+  const totalMinutes = Math.min(23 * 60 + 30, Math.max(0, hh * 60 + mm));
+  const rounded = Math.round(totalMinutes / 30) * 30;
+  const clamped = Math.min(23 * 60 + 30, rounded);
+  const outH = String(Math.floor(clamped / 60)).padStart(2, '0');
+  const outM = String(clamped % 60).padStart(2, '0');
+  return `${outH}:${outM}`;
+};
+
+const addHalfHour = (timeStr) => {
+  const snapped = snapToHalfHour(timeStr);
+  const idx = HALF_HOUR_TIMES.indexOf(snapped);
+  if (idx === -1 || idx >= HALF_HOUR_TIMES.length - 1) return '23:30';
+  return HALF_HOUR_TIMES[idx + 1];
+};
+
+const parseRangeFromSchedule = (record) => {
+  const fallbackDate = today;
+  const startRaw = record?.start_at || `${fallbackDate}T09:00`;
+  const [rawStartDate = fallbackDate, rawStartTimePart = '09:00'] = String(startRaw).split('T');
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(rawStartDate) ? rawStartDate : fallbackDate;
+  const startTime = snapToHalfHour(rawStartTimePart.slice(0, 5));
+
+  const endRaw = record?.end_at || `${startDate}T${addHalfHour(startTime)}`;
+  const [rawEndDate = startDate, rawEndTimePart = addHalfHour(startTime)] = String(endRaw).split('T');
+  const endDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEndDate) ? rawEndDate : startDate;
+  const endTime = snapToHalfHour(rawEndTimePart.slice(0, 5));
+
+  return { startDate, startTime, endDate, endTime };
+};
 
 const DEFAULT_RECRUIT_COHORTS = {
   '1기': { short: '2026.12.01 ~ 2026.12.14', mid: '2026.12.01 ~ 2026.12.20', long: '2026.12.01 ~ 2026.12.28' },
@@ -99,8 +175,18 @@ const getWeekRange = () => {
 const formatKoreanDateShort = (isoStr) => {
   if (!isoStr) return '';
   const d = new Date(isoStr);
+  if (Number.isNaN(d.getTime())) return String(isoStr).slice(0, 10);
   const days = ['일', '월', '화', '수', '목', '금', '토'];
   return `${d.getMonth() + 1}월 ${d.getDate()}일(${days[d.getDay()]})`;
+};
+
+const formatTimeShort = (isoStr) => {
+  if (!isoStr) return '';
+  const part = String(isoStr).split('T')[1];
+  if (part && /^\d{2}:\d{2}/.test(part)) return part.slice(0, 5);
+  const d = new Date(isoStr);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 };
 
 const normalizeDashboardConfig = (raw) => {
@@ -142,15 +228,21 @@ const emptyForms = {
   schedules: {
     title: '',
     category: '프로그램',
-    start_at: today + 'T14:00',
-    end_at: today + 'T16:00',
+    startDate: today,
+    startTime: '09:00',
+    endDate: today,
+    endTime: '10:00',
+    start_at: today + 'T09:00',
+    end_at: today + 'T10:00',
     location: '',
     expected_count: 0,
+    managers: [],
     description: ''
   },
   attendance: { participant_id: '', attend_date: today, status: '출석', memo: '' },
   consultations: { participant_id: '', consulted_at: today, manager: '', category: '진로·취업', content: '', next_action: '' },
-  followups: { participant_id: '', activity_date: today, activity_name: '', status: '참여', memo: '' }
+  followups: { participant_id: '', activity_date: today, activity_name: '', status: '참여', memo: '' },
+  managers: { name: '', role: '', phone: '', memo: '' }
 };
 
 const tableByPage = {
@@ -158,7 +250,8 @@ const tableByPage = {
   schedules: 'schedules',
   attendance: 'attendance',
   consultations: 'consultations',
-  followups: 'followups'
+  followups: 'followups',
+  managers: 'managers'
 };
 
 const titles = {
@@ -167,6 +260,7 @@ const titles = {
   attendance: '출결 관리',
   consultations: '상담 관리',
   followups: '사후관리',
+  managers: '담당자 관리',
   settings: '사이트 설정'
 };
 
@@ -181,11 +275,11 @@ const fields = {
   ],
   schedules: [
     ['title', '일정명', 'text'],
-    ['category', '구분', 'select', ['프로그램', '사후관리', '상담', '회의', '행사', '기타']],
-    ['start_at', '시작 일시', 'datetime-local'],
-    ['end_at', '종료 일시', 'datetime-local'],
+    ['category', '구분', 'select', SCHEDULE_CATEGORIES],
+    ['datetime_range', '시작·종료 일시', 'datetime_range'],
     ['location', '장소', 'text'],
     ['expected_count', '참여 인원(명)', 'number'],
+    ['managers', '담당자', 'multi_manager'],
     ['description', '내용', 'textarea']
   ],
   attendance: [
@@ -208,17 +302,54 @@ const fields = {
     ['activity_name', '활동명', 'text'],
     ['status', '참여 여부', 'select', ['참여', '불참', '취소']],
     ['memo', '비고', 'textarea']
+  ],
+  managers: [
+    ['name', '담당자명', 'text'],
+    ['role', '담당 역할/팀', 'text'],
+    ['phone', '연락처', 'text'],
+    ['memo', '비고', 'textarea']
   ]
 };
 
+const extractScheduleManagers = (schedule) => {
+  if (!schedule) return [];
+  if (Array.isArray(schedule.managers)) {
+    return schedule.managers
+      .map((item) => (typeof item === 'string' ? item : item?.name))
+      .map((s) => (s || '').trim())
+      .filter(Boolean);
+  }
+  if (typeof schedule.managers === 'string' && schedule.managers.trim()) {
+    try {
+      const parsed = JSON.parse(schedule.managers);
+      if (Array.isArray(parsed)) {
+        return parsed.map((v) => String(v).trim()).filter(Boolean);
+      }
+    } catch (_) {
+      return schedule.managers
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+  }
+  if (typeof schedule.manager === 'string' && schedule.manager.trim()) {
+    return schedule.manager
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
 function App() {
-const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState('dashboard');
   const [rows, setRows] = useState({
     participants: [],
     schedules: [],
     attendance: [],
     consultations: [],
-    followups: []
+    followups: [],
+    managers: []
   });
   const [siteConfig, setSiteConfig] = useState(DEFAULT_SETTINGS);
   const [savedNotice, setSavedNotice] = useState('');
@@ -254,30 +385,52 @@ const [page, setPage] = useState('dashboard');
     if (!supabase) return;
     setLoading(true);
     setError('');
-    const names = ['participants', 'schedules', 'attendance', 'consultations', 'followups'];
+    const names = ['participants', 'schedules', 'attendance', 'consultations', 'followups', 'managers'];
     const results = await Promise.all(
-      names.map((n) =>
-        supabase
-          .from(n)
-          .select('*')
-          .order(
-            n === 'schedules'
-              ? 'start_at'
-              : n === 'participants'
-              ? 'created_at'
-              : n === 'attendance'
-              ? 'attend_date'
-              : n === 'consultations'
-              ? 'consulted_at'
-              : 'activity_date',
-            { ascending: false }
-          )
-          .limit(500)
-      )
+      names.map((n) => {
+        if (n === 'managers') {
+          return supabase.from(n).select('*').order('name', { ascending: true }).limit(500);
+        }
+        const orderCol =
+          n === 'schedules'
+            ? 'start_at'
+            : n === 'participants'
+            ? 'created_at'
+            : n === 'attendance'
+            ? 'attend_date'
+            : n === 'consultations'
+            ? 'consulted_at'
+            : 'activity_date';
+        return supabase.from(n).select('*').order(orderCol, { ascending: false }).limit(500);
+      })
     );
-    const bad = results.find((r) => r.error);
-    if (bad) setError(bad.error.message);
-    else setRows(Object.fromEntries(names.map((n, i) => [n, results[i].data || []])));
+
+    const nextRows = {
+      participants: [],
+      schedules: [],
+      attendance: [],
+      consultations: [],
+      followups: [],
+      managers: []
+    };
+    const errors = [];
+
+    names.forEach((n, idx) => {
+      if (results[idx].error) {
+        if (n === 'managers' && /does not exist|schema cache/i.test(results[idx].error.message)) {
+          nextRows.managers = [];
+        } else {
+          errors.push(`${n}: ${results[idx].error.message}`);
+        }
+      } else {
+        nextRows[n] = results[idx].data || [];
+      }
+    });
+
+    if (errors.length) {
+      setError(errors.join(' / '));
+    }
+    setRows(nextRows);
     await loadSettings();
     setLoading(false);
   };
@@ -318,27 +471,100 @@ const [page, setPage] = useState('dashboard');
   };
 
   const openNew = () => {
+    const targetTable = tableByPage[page] || 'schedules';
     setEditing(null);
-    setForm({ ...emptyForms[tableByPage[page]] });
+    if (targetTable === 'schedules') {
+      setForm({
+        ...emptyForms.schedules,
+        category: SCHEDULE_CATEGORIES[0],
+        startDate: today,
+        startTime: '09:00',
+        endDate: today,
+        endTime: '10:00',
+        managers: []
+      });
+    } else {
+      setForm({ ...(emptyForms[targetTable] || {}) });
+    }
+    setModal(true);
+  };
+
+  const openNewOnDate = (dateStr) => {
+    const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : today;
+    setPage('schedules');
+    setEditing(null);
+    setForm({
+      ...emptyForms.schedules,
+      category: SCHEDULE_CATEGORIES[0],
+      startDate: safeDate,
+      startTime: '09:00',
+      endDate: safeDate,
+      endTime: '10:00',
+      managers: []
+    });
     setModal(true);
   };
 
   const openEdit = (r) => {
+    const targetTable = tableByPage[page] || 'schedules';
     setEditing(r.id);
-    setForm({ ...r });
+    if (targetTable === 'schedules') {
+      const range = parseRangeFromSchedule(r);
+      const safeCategory = SCHEDULE_CATEGORIES.includes(r.category) ? r.category : SCHEDULE_CATEGORIES[0];
+      setForm({
+        ...emptyForms.schedules,
+        ...r,
+        category: safeCategory,
+        startDate: range.startDate,
+        startTime: range.startTime,
+        endDate: range.endDate,
+        endTime: range.endTime,
+        managers: extractScheduleManagers(r)
+      });
+    } else {
+      setForm({ ...r });
+    }
     setModal(true);
   };
 
   const save = async (e) => {
     e.preventDefault();
     const table = tableByPage[page];
+    if (!table || !supabase) return;
+
     const payload = { ...form };
     delete payload.id;
     delete payload.created_at;
     delete payload.updated_at;
-    if (table === 'schedules' && payload.expected_count !== undefined && payload.expected_count !== '') {
-      payload.expected_count = Number(payload.expected_count) || 0;
+
+    if (table === 'schedules') {
+      const startDate = payload.startDate || today;
+      const startTime = snapToHalfHour(payload.startTime || '09:00');
+      const endDate = payload.endDate || startDate;
+      let endTime = snapToHalfHour(payload.endTime || addHalfHour(startTime));
+
+      const startIsoLocal = `${startDate}T${startTime}`;
+      let endIsoLocal = `${endDate}T${endTime}`;
+      if (endIsoLocal < startIsoLocal) {
+        endTime = addHalfHour(startTime);
+        endIsoLocal = `${startDate}T${endTime}`;
+      }
+
+      payload.start_at = startIsoLocal;
+      payload.end_at = endIsoLocal;
+      payload.category = SCHEDULE_CATEGORIES.includes(payload.category) ? payload.category : '프로그램';
+      payload.expected_count =
+        payload.expected_count !== undefined && payload.expected_count !== ''
+          ? Number(payload.expected_count) || 0
+          : 0;
+      payload.managers = Array.isArray(payload.managers) ? payload.managers : [];
+
+      delete payload.startDate;
+      delete payload.startTime;
+      delete payload.endDate;
+      delete payload.endTime;
     }
+
     if (editing) {
       const { error: upError } = await supabase.from(table).update(payload).eq('id', editing);
       if (upError) {
@@ -357,10 +583,24 @@ const [page, setPage] = useState('dashboard');
   };
 
   const remove = async (id) => {
+    if (!id || !supabase) return;
+    const table = tableByPage[page];
+    if (!table) return;
     if (!confirm('이 항목을 삭제할까요?')) return;
-    const { error: delError } = await supabase.from(tableByPage[page]).delete().eq('id', id);
-    if (delError) setError(delError.message);
-    else load();
+    const { error: delError } = await supabase.from(table).delete().eq('id', id);
+    if (delError) {
+      setError(delError.message);
+      return;
+    }
+    setModal(false);
+    await load();
+  };
+
+  const toggleFormManager = (managerName) => {
+    const current = Array.isArray(form.managers) ? form.managers : [];
+    const exists = current.includes(managerName);
+    const next = exists ? current.filter((m) => m !== managerName) : [...current, managerName];
+    setForm({ ...form, managers: next });
   };
 
   const participantName = (id) => rows.participants.find((p) => p.id === id)?.name || '참여자 정보 없음';
@@ -460,7 +700,7 @@ const [page, setPage] = useState('dashboard');
           {error && (
             <div className="alert">
               <AlertCircle size={17} />
-              {error}
+              <span>{error}</span>
               <button onClick={() => setError('')}>닫기</button>
             </div>
           )}
@@ -487,6 +727,7 @@ const [page, setPage] = useState('dashboard');
               month={month}
               setMonth={setMonth}
               onAdd={openNew}
+              onAddOnDate={openNewOnDate}
               onEdit={(r) => {
                 setPage('schedules');
                 openEdit(r);
@@ -505,6 +746,8 @@ const [page, setPage] = useState('dashboard');
                       ? '참여자별 출결 내역을 기록하고 확인합니다.'
                       : page === 'consultations'
                       ? '참여자 상담 이력과 후속 조치를 기록합니다.'
+                      : page === 'managers'
+                      ? '일정 등록 시 선택할 담당자 명단을 미리 등록하고 관리합니다.'
                       : '수료자 사후관리 활동과 참여 이력을 관리합니다.'}
                   </p>
                 </div>
@@ -553,7 +796,7 @@ const [page, setPage] = useState('dashboard');
           <div className="modal">
             <div className="modal-head">
               <div>
-                <p className="eyebrow">NEW RECORD</p>
+                <p className="eyebrow">{editing ? 'EDIT RECORD' : 'NEW RECORD'}</p>
                 <h2>{editing ? '정보 수정' : titles[page] + ' 등록'}</h2>
               </div>
               <button className="icon-btn" onClick={() => setModal(false)}>
@@ -562,53 +805,176 @@ const [page, setPage] = useState('dashboard');
             </div>
             <form onSubmit={save}>
               <div className="form-grid">
-                {(fields[page] || []).map(([key, label, type, options]) => (
-                  <label className={type === 'textarea' ? 'wide' : ''} key={key}>
-                    {label}
-                    {type === 'select' ? (
-                      <select
-                        value={form[key] || ''}
-                        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                      >
-                        {options.map((o) => (
-                          <option key={o}>{o}</option>
-                        ))}
-                      </select>
-                    ) : type === 'participant' ? (
-                      <select
-                        required
-                        value={form[key] || ''}
-                        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                      >
-                        <option value="">참여자 선택</option>
-                        {rows.participants.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name} · {p.cohort}
-                          </option>
-                        ))}
-                      </select>
-                    ) : type === 'textarea' ? (
-                      <textarea
-                        rows="3"
-                        value={form[key] || ''}
-                        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                      />
-                    ) : (
-                      <input
-                        required={['name', 'title', 'participant_id'].includes(key)}
-                        type={type}
-                        value={form[key] ?? ''}
-                        onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                      />
-                    )}
-                  </label>
-                ))}
+                {(fields[page] || []).map(([key, label, type, options]) => {
+                  const isWide =
+                    type === 'textarea' ||
+                    type === 'datetime_range' ||
+                    type === 'multi_manager' ||
+                    key === 'title';
+
+                  return (
+                    <label className={isWide ? 'wide' : ''} key={key}>
+                      {label}
+                      {type === 'select' ? (
+                        <select
+                          value={form[key] || options?.[0] || ''}
+                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                        >
+                          {options.map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      ) : type === 'datetime_range' ? (
+                        <div className="datetime-range-box">
+                          <div className="datetime-row">
+                            <span className="range-tag">시작</span>
+                            <input
+                              type="date"
+                              required
+                              value={form.startDate || today}
+                              onChange={(e) => {
+                                const nextStartDate = e.target.value;
+                                const nextEndDate =
+                                  form.endDate && form.endDate < nextStartDate
+                                    ? nextStartDate
+                                    : form.endDate || nextStartDate;
+                                setForm({
+                                  ...form,
+                                  startDate: nextStartDate,
+                                  endDate: nextEndDate
+                                });
+                              }}
+                            />
+                            <select
+                              value={snapToHalfHour(form.startTime || '09:00')}
+                              onChange={(e) => {
+                                const nextStartTime = e.target.value;
+                                const nextEndTime =
+                                  (form.endDate || form.startDate) === (form.startDate || today) &&
+                                  (form.endTime || '10:00') <= nextStartTime
+                                    ? addHalfHour(nextStartTime)
+                                    : form.endTime || addHalfHour(nextStartTime);
+                                setForm({
+                                  ...form,
+                                  startTime: nextStartTime,
+                                  endTime: nextEndTime
+                                });
+                              }}
+                            >
+                              {HALF_HOUR_TIMES.map((t) => (
+                                <option key={t} value={t}>
+                                  {t}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="datetime-row">
+                            <span className="range-tag end">종료</span>
+                            <input
+                              type="date"
+                              required
+                              min={form.startDate || today}
+                              value={form.endDate || form.startDate || today}
+                              onChange={(e) =>
+                                setForm({ ...form, endDate: e.target.value })
+                              }
+                            />
+                            <select
+                              value={snapToHalfHour(form.endTime || '10:00')}
+                              onChange={(e) =>
+                                setForm({ ...form, endTime: e.target.value })
+                              }
+                            >
+                              {HALF_HOUR_TIMES.map((t) => (
+                                <option key={t} value={t}>
+                                  {t}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      ) : type === 'multi_manager' ? (
+                        <div className="manager-selector-box">
+                          {rows.managers && rows.managers.length > 0 ? (
+                            <div className="manager-chip-grid">
+                              {rows.managers.map((m) => {
+                                const selectedList = Array.isArray(form.managers) ? form.managers : [];
+                                const checked = selectedList.includes(m.name);
+                                return (
+                                  <button
+                                    key={m.id || m.name}
+                                    type="button"
+                                    className={'manager-pick-btn ' + (checked ? 'selected' : '')}
+                                    onClick={() => toggleFormManager(m.name)}
+                                  >
+                                    <span>{m.name}</span>
+                                    {m.role && <small>{m.role}</small>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className="muted" style={{ margin: 0 }}>
+                              등록된 담당자가 없습니다. 먼저 좌측 <b>담당자 관리</b> 메뉴에서 담당자를 등록해 주세요.
+                            </p>
+                          )}
+                          {Array.isArray(form.managers) && form.managers.length > 0 && (
+                            <div className="selected-managers-summary">
+                              선택된 담당자: <b>{form.managers.join(', ')}</b>
+                            </div>
+                          )}
+                        </div>
+                      ) : type === 'participant' ? (
+                        <select
+                          required
+                          value={form[key] || ''}
+                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                        >
+                          <option value="">참여자 선택</option>
+                          {rows.participants.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} · {p.cohort}
+                            </option>
+                          ))}
+                        </select>
+                      ) : type === 'textarea' ? (
+                        <textarea
+                          rows="3"
+                          value={form[key] || ''}
+                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                        />
+                      ) : (
+                        <input
+                          required={['name', 'title', 'participant_id'].includes(key)}
+                          type={type}
+                          value={form[key] ?? ''}
+                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                        />
+                      )}
+                    </label>
+                  );
+                })}
               </div>
-              <div className="modal-actions">
-                <button type="button" className="secondary" onClick={() => setModal(false)}>
-                  취소
-                </button>
-                <button className="primary">저장하기</button>
+              <div className="modal-actions between">
+                <div>
+                  {editing && (
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => remove(editing)}
+                    >
+                      <Trash2 size={15} /> 삭제
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button type="button" className="secondary" onClick={() => setModal(false)}>
+                    취소
+                  </button>
+                  <button className="primary">저장하기</button>
+                </div>
               </div>
             </form>
           </div>
@@ -1134,12 +1500,11 @@ function SetupScreen() {
         <p className="eyebrow">PROJECT INITIALIZATION</p>
         <h1>청도지 WORKSPACE</h1>
         <h2>서비스 연결이 필요합니다.</h2>
-        <p>Supabase 프로젝트를 생성한 뒤 환경변수를 설정하면 로그인과 데이터 저장 기능을 사용할 수 있습니다.</p>
+        <p>Supabase 프로젝트를 생성한 뒤 환경변수를 설정하면 데이터 저장 기능을 사용할 수 있습니다.</p>
         <ol>
           <li>Supabase에서 새 프로젝트 생성</li>
-          <li>프로젝트 URL과 anon key를 <code>.env</code> 파일에 입력</li>
-          <li><code>supabase/schema.sql</code>을 SQL Editor에서 실행</li>
-          <li>관리자가 팀원을 이메일로 초대하고 공개 회원가입 비활성화</li>
+          <li>프로젝트 URL과 anon key를 환경변수에 입력</li>
+          <li>필요한 테이블 및 정책 설정 실행</li>
         </ol>
         <div className="code-note">
           VITE_SUPABASE_URL=프로젝트 URL
@@ -1168,13 +1533,11 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
     }
   }, [dashConfig.recruit_default_cohort]);
 
-  // 공지사항: 상단 고정 우선 정렬
   const sortedNotices = useMemo(() => {
     const list = [...(dashConfig.notices || [])];
     return list.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
   }, [dashConfig.notices]);
 
-  // 두 번째 줄: 오늘의 일정 & 이번 주 주요 일정
   const weekRange = getWeekRange();
   const todaySchedules = rows.schedules
     .filter((s) => s.start_at?.slice(0, 10) === today)
@@ -1187,7 +1550,6 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
     })
     .sort((a, b) => a.start_at.localeCompare(b.start_at));
 
-  // 세 번째 줄: 사후관리 활동 현황 (일정의 사후관리 참여 인원 합계 + 남은 사후관리 활동)
   const kw = (dashConfig.followup_schedule_keyword || '사후관리').trim();
   const followupSchedules = rows.schedules.filter(
     (s) => s.category === kw || (s.title && s.title.includes(kw))
@@ -1244,7 +1606,6 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
         />
       ) : (
         <>
-          {/* 첫 번째 줄: 공지사항 및 주요 전달사항 (한 줄 전체) */}
           <section className="panel dash-card accent-notice" style={{ marginBottom: '18px' }}>
             <div className="panel-head dash-card-head">
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1279,7 +1640,6 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
             )}
           </section>
 
-          {/* 두 번째 줄: 오늘의 일정 / 이번주 주요 일정 (2열) */}
           <div className="dashboard-grid" style={{ marginBottom: '18px' }}>
             <section className="panel dash-card accent-today">
               <div className="panel-head dash-card-head">
@@ -1295,28 +1655,29 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                 </button>
               </div>
               {todaySchedules.length ? (
-                todaySchedules.map((s) => (
-                  <div className="dash-item-box" key={s.id}>
-                    <div className="dash-item-title-row">
-                      <span className="program-tag">[{s.category || '일정'}]</span>
-                      <b className="dash-item-title">{s.title}</b>
-                      {Number(s.expected_count) > 0 && (
-                        <span className="pill">{s.expected_count}명</span>
-                      )}
+                todaySchedules.map((s) => {
+                  const mgrs = extractScheduleManagers(s);
+                  return (
+                    <div className="dash-item-box" key={s.id}>
+                      <div className="dash-item-title-row">
+                        <span className="program-tag">[{s.category || '일정'}]</span>
+                        <b className="dash-item-title">{s.title}</b>
+                        {Number(s.expected_count) > 0 && (
+                          <span className="pill">{s.expected_count}명</span>
+                        )}
+                      </div>
+                      <div className="dash-item-body">
+                        <span className="meta-line">
+                          <Clock3 size={13} /> {formatTimeShort(s.start_at)}
+                          {s.end_at ? ` ~ ${formatTimeShort(s.end_at)}` : ''}
+                          {s.location ? ` · 장소: ${s.location}` : ''}
+                          {mgrs.length ? ` · 담당: ${mgrs.join(', ')}` : ''}
+                        </span>
+                        {s.description && <p className="detail-desc">{s.description}</p>}
+                      </div>
                     </div>
-                    <div className="dash-item-body">
-                      <span className="meta-line">
-                        <Clock3 size={13} />{' '}
-                        {new Date(s.start_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
-                        {s.end_at
-                          ? ` ~ ${new Date(s.end_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`
-                          : ''}
-                        {s.location ? ` · 장소: ${s.location}` : ''}
-                      </span>
-                      {s.description && <p className="detail-desc">{s.description}</p>}
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <Empty text="오늘 등록된 일정이 없습니다." />
               )}
@@ -1338,34 +1699,38 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                 </button>
               </div>
               {weekSchedules.length ? (
-                weekSchedules.map((s) => (
-                  <div className="week-item-card" key={s.id}>
-                    <div className="program-badge-box">[{s.category || '프로그램'}]</div>
-                    <div className="week-item-content">
-                      <div className="dash-item-title-row">
-                        <b className="dash-item-title">{s.title}</b>
-                        {Number(s.expected_count) > 0 && (
-                          <span className="pill">{s.expected_count}명</span>
-                        )}
-                      </div>
-                      <div className="dash-item-body">
-                        <span className="meta-line">
-                          <CalendarDays size={13} /> {formatKoreanDateShort(s.start_at)}{' '}
-                          {new Date(s.start_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
-                          {s.location ? ` · ${s.location}` : ''}
-                        </span>
-                        {s.description && <p className="detail-desc">{s.description}</p>}
+                weekSchedules.map((s) => {
+                  const mgrs = extractScheduleManagers(s);
+                  return (
+                    <div className="week-item-card" key={s.id}>
+                      <div className="program-badge-box">[{s.category || '프로그램'}]</div>
+                      <div className="week-item-content">
+                        <div className="dash-item-title-row">
+                          <b className="dash-item-title">{s.title}</b>
+                          {Number(s.expected_count) > 0 && (
+                            <span className="pill">{s.expected_count}명</span>
+                          )}
+                        </div>
+                        <div className="dash-item-body">
+                          <span className="meta-line">
+                            <CalendarDays size={13} /> {formatKoreanDateShort(s.start_at)}{' '}
+                            {formatTimeShort(s.start_at)}
+                            {s.end_at ? ` ~ ${formatTimeShort(s.end_at)}` : ''}
+                            {s.location ? ` · ${s.location}` : ''}
+                            {mgrs.length ? ` · 담당: ${mgrs.join(', ')}` : ''}
+                          </span>
+                          {s.description && <p className="detail-desc">{s.description}</p>}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <Empty text="이번 주에 등록된 일정이 없습니다." />
               )}
             </section>
           </div>
 
-          {/* 세 번째 줄: 사후관리 활동 현황 / 참여자 모집 일정 (2열) */}
           <div className="dashboard-grid">
             <section className="panel dash-card accent-followup">
               <div className="panel-head dash-card-head">
@@ -1489,6 +1854,12 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
       ['activity_name', '활동명'],
       ['status', '참여 여부'],
       ['memo', '비고']
+    ],
+    managers: [
+      ['name', '담당자명'],
+      ['role', '담당 역할/팀'],
+      ['phone', '연락처'],
+      ['memo', '비고']
     ]
   };
 
@@ -1497,7 +1868,7 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
       <table>
         <thead>
           <tr>
-            {columns[page].map((c) => (
+            {(columns[page] || []).map((c) => (
               <th key={c[0]}>{c[1]}</th>
             ))}
             <th>관리</th>
@@ -1506,7 +1877,7 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.id}>
-              {columns[page].map(([k]) => (
+              {(columns[page] || []).map(([k]) => (
                 <td key={k}>
                   {k === 'participant_id' ? (
                     participantName(r[k])
@@ -1534,18 +1905,29 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
   );
 }
 
-function CalendarPage({ rows, month, setMonth, onAdd, onEdit }) {
+function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
   const year = month.getFullYear(),
     m = month.getMonth(),
     first = new Date(year, m, 1),
     days = new Date(year, m + 1, 0).getDate(),
     offset = (first.getDay() + 6) % 7;
   const cells = Array.from({ length: Math.ceil((offset + days) / 7) * 7 }, (_, i) => i - offset + 1);
-  const items = rows.schedules;
-  const dayItems = (d) =>
-    items.filter(
-      (s) => s.start_at?.slice(0, 10) === `${year}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-    );
+  const items = rows.schedules || [];
+
+  const getDateStr = (d) =>
+    `${year}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+
+  const dayItems = (d) => {
+    const targetDate = getDateStr(d);
+    return items
+      .filter((s) => {
+        const startD = s.start_at?.slice(0, 10);
+        const endD = s.end_at?.slice(0, 10) || startD;
+        if (!startD) return false;
+        return targetDate >= startD && targetDate <= endD;
+      })
+      .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
+  };
 
   return (
     <>
@@ -1553,19 +1935,40 @@ function CalendarPage({ rows, month, setMonth, onAdd, onEdit }) {
         <div>
           <p className="eyebrow">SCHEDULE CALENDAR</p>
           <h1>일정 관리</h1>
-          <p className="muted">사업단의 프로그램, 사후관리, 상담, 회의 일정을 관리합니다.</p>
+          <p className="muted">
+            날짜 칸을 클릭해 바로 일정을 추가하거나, 일정을 클릭해 상세 확인·수정·삭제할 수 있습니다.
+          </p>
         </div>
         <button className="primary" onClick={onAdd}>
           <Plus size={17} /> 일정 등록
         </button>
       </div>
+
       <div className="calendar-panel">
         <div className="calendar-head">
           <div>
             <h2>
               {year}년 {m + 1}월
             </h2>
-            <p>월간 일정 캘린더</p>
+            <p>구분별 색상 및 세부 정보 포함 월간 일정 캘린더</p>
+          </div>
+          <div className="calendar-legend">
+            {SCHEDULE_CATEGORIES.map((cat) => {
+              const st = getCategoryStyle(cat);
+              return (
+                <span
+                  key={cat}
+                  className="legend-pill"
+                  style={{
+                    backgroundColor: st.badgeBg,
+                    color: st.badgeText,
+                    borderColor: st.border
+                  }}
+                >
+                  {cat}
+                </span>
+              );
+            })}
           </div>
           <div className="month-nav">
             <button onClick={() => setMonth(new Date(year, m - 1, 1))}>
@@ -1577,38 +1980,103 @@ function CalendarPage({ rows, month, setMonth, onAdd, onEdit }) {
             </button>
           </div>
         </div>
+
         <div className="calendar-grid">
           {['월', '화', '수', '목', '금', '토', '일'].map((d) => (
             <div className="weekday" key={d}>
               {d}
             </div>
           ))}
-          {cells.map((d, i) => (
-            <div key={i} className={'calendar-cell ' + (d < 1 || d > days ? 'outside' : '')}>
-              <span
-                className={
-                  'day-number ' +
-                  (d === new Date().getDate() && m === new Date().getMonth() && year === new Date().getFullYear()
-                    ? 'today'
-                    : '')
-                }
+          {cells.map((d, i) => {
+            const isValidDay = d > 0 && d <= days;
+            const dateStr = isValidDay ? getDateStr(d) : '';
+            const events = isValidDay ? dayItems(d) : [];
+            const isTodayCell =
+              isValidDay &&
+              d === new Date().getDate() &&
+              m === new Date().getMonth() &&
+              year === new Date().getFullYear();
+
+            return (
+              <div
+                key={i}
+                className={'calendar-cell ' + (!isValidDay ? 'outside' : 'clickable-cell')}
+                onClick={() => {
+                  if (isValidDay) onAddOnDate(dateStr);
+                }}
               >
-                {d > 0 && d <= days ? d : ''}
-              </span>
-              {d > 0 &&
-                d <= days &&
-                dayItems(d)
-                  .slice(0, 3)
-                  .map((s) => (
-                    <button className="calendar-event" key={s.id} onClick={() => onEdit(s)} title={s.title}>
-                      [{s.category}] {s.title}
+                <div className="calendar-cell-top">
+                  <span className={'day-number ' + (isTodayCell ? 'today' : '')}>
+                    {isValidDay ? d : ''}
+                  </span>
+                  {isValidDay && (
+                    <button
+                      type="button"
+                      className="cell-quick-add"
+                      title={`${dateStr} 일정 추가`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onAddOnDate(dateStr);
+                      }}
+                    >
+                      <Plus size={12} />
                     </button>
-                  ))}
-              {d > 0 && d <= days && dayItems(d).length > 3 && (
-                <small className="more">+{dayItems(d).length - 3}개 더보기</small>
-              )}
-            </div>
-          ))}
+                  )}
+                </div>
+
+                {isValidDay &&
+                  events.map((s) => {
+                    const st = getCategoryStyle(s.category);
+                    const mgrs = extractScheduleManagers(s);
+                    const startT = formatTimeShort(s.start_at);
+                    const endT = formatTimeShort(s.end_at);
+                    const timeLabel = startT ? (endT ? `${startT}~${endT}` : startT) : '';
+
+                    return (
+                      <button
+                        type="button"
+                        className="calendar-event-rich"
+                        key={s.id}
+                        style={{
+                          backgroundColor: st.bg,
+                          borderLeftColor: st.border,
+                          color: st.text
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEdit(s);
+                        }}
+                        title={`${s.title} (${s.category || '기타'})`}
+                      >
+                        <div className="cal-ev-header">
+                          <span
+                            className="cal-ev-cat"
+                            style={{
+                              backgroundColor: st.badgeBg,
+                              color: st.badgeText
+                            }}
+                          >
+                            {s.category || '기타'}
+                          </span>
+                          {timeLabel && <span className="cal-ev-time">{timeLabel}</span>}
+                        </div>
+                        <div className="cal-ev-title">{s.title}</div>
+                        <div className="cal-ev-meta">
+                          {s.location && <span>📍 {s.location}</span>}
+                          {Number(s.expected_count) > 0 && (
+                            <span>👥 {s.expected_count}명</span>
+                          )}
+                          {mgrs.length > 0 && <span>🙋 {mgrs.join(', ')}</span>}
+                        </div>
+                        {s.description && (
+                          <div className="cal-ev-desc">{s.description}</div>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+            );
+          })}
         </div>
       </div>
     </>
@@ -1681,7 +2149,8 @@ function Stats({ rows }) {
             ['일정', rows.schedules.length],
             ['출결 기록', rows.attendance.length],
             ['상담 기록', rows.consultations.length],
-            ['사후관리 활동', rows.followups.length]
+            ['사후관리 활동', rows.followups.length],
+            ['등록 담당자', rows.managers.length]
           ].map(([l, n]) => (
             <div className="summary-line" key={l}>
               <span>{l}</span>
