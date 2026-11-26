@@ -24,7 +24,8 @@ import {
   Pin,
   ArrowUp,
   ArrowDown,
-  Trash2
+  Trash2,
+  ArrowUpDown
 } from 'lucide-react';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
@@ -44,6 +45,7 @@ const nav = [
 ];
 
 const SCHEDULE_CATEGORIES = ['프로그램', '사후관리', '행사', '기타'];
+const MANAGER_ROLES = ['선임 매니저', '매니저'];
 
 const CATEGORY_STYLES = {
   '프로그램': {
@@ -103,6 +105,14 @@ const addHalfHour = (timeStr) => {
   return HALF_HOUR_TIMES[idx + 1];
 };
 
+const hasExplicitTime = (rawStr) => {
+  if (!rawStr) return false;
+  const s = String(rawStr);
+  if (!s.includes('T')) return false;
+  const timePart = s.split('T')[1] || '';
+  return /^\d{2}:\d{2}/.test(timePart);
+};
+
 const parseRangeFromSchedule = (record) => {
   const fallbackDate = today;
   const startRaw = record?.start_at || `${fallbackDate}T09:00`;
@@ -115,7 +125,9 @@ const parseRangeFromSchedule = (record) => {
   const endDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEndDate) ? rawEndDate : startDate;
   const endTime = snapToHalfHour(rawEndTimePart.slice(0, 5));
 
-  return { startDate, startTime, endDate, endTime };
+  const timeEnabled = record?.all_day === true ? false : hasExplicitTime(record?.start_at);
+
+  return { startDate, startTime, endDate, endTime, timeEnabled };
 };
 
 const DEFAULT_RECRUIT_COHORTS = {
@@ -174,19 +186,41 @@ const getWeekRange = () => {
 
 const formatKoreanDateShort = (isoStr) => {
   if (!isoStr) return '';
+  const datePart = String(isoStr).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    const [y, m, d] = datePart.split('-').map(Number);
+    const dt = new Date(y, m - 1, d);
+    const days = ['일', '월', '화', '수', '목', '금', '토'];
+    return `${m}월 ${d}일(${days[dt.getDay()]})`;
+  }
   const d = new Date(isoStr);
-  if (Number.isNaN(d.getTime())) return String(isoStr).slice(0, 10);
+  if (Number.isNaN(d.getTime())) return datePart;
   const days = ['일', '월', '화', '수', '목', '금', '토'];
   return `${d.getMonth() + 1}월 ${d.getDate()}일(${days[d.getDay()]})`;
 };
 
-const formatTimeShort = (isoStr) => {
+const formatTimeShort = (schedule) => {
+  if (!schedule) return '';
+  if (schedule.all_day === true) return '종일(시간 미설정)';
+  const isoStr = typeof schedule === 'string' ? schedule : schedule.start_at;
   if (!isoStr) return '';
-  const part = String(isoStr).split('T')[1];
+  const s = String(isoStr);
+  if (!s.includes('T')) return '종일(시간 미설정)';
+  const part = s.split('T')[1];
   if (part && /^\d{2}:\d{2}/.test(part)) return part.slice(0, 5);
-  const d = new Date(isoStr);
+  const d = new Date(s);
   if (Number.isNaN(d.getTime())) return '';
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+
+const formatScheduleTimeRange = (schedule) => {
+  if (!schedule) return '';
+  if (schedule.all_day === true || !hasExplicitTime(schedule.start_at)) {
+    return '시간 미설정';
+  }
+  const startT = formatTimeShort(schedule.start_at);
+  const endT = schedule.end_at && hasExplicitTime(schedule.end_at) ? formatTimeShort(schedule.end_at) : '';
+  return startT ? (endT ? `${startT}~${endT}` : startT) : '';
 };
 
 const normalizeDashboardConfig = (raw) => {
@@ -228,6 +262,7 @@ const emptyForms = {
   schedules: {
     title: '',
     category: '프로그램',
+    timeEnabled: true,
     startDate: today,
     startTime: '09:00',
     endDate: today,
@@ -242,7 +277,7 @@ const emptyForms = {
   attendance: { participant_id: '', attend_date: today, status: '출석', memo: '' },
   consultations: { participant_id: '', consulted_at: today, manager: '', category: '진로·취업', content: '', next_action: '' },
   followups: { participant_id: '', activity_date: today, activity_name: '', status: '참여', memo: '' },
-  managers: { name: '', role: '', phone: '', memo: '' }
+  managers: { name: '', role: '매니저', memo: '' }
 };
 
 const tableByPage = {
@@ -305,8 +340,7 @@ const fields = {
   ],
   managers: [
     ['name', '담당자명', 'text'],
-    ['role', '담당 역할/팀', 'text'],
-    ['phone', '연락처', 'text'],
+    ['role', '담당 역할', 'select', MANAGER_ROLES],
     ['memo', '비고', 'textarea']
   ]
 };
@@ -341,6 +375,12 @@ const extractScheduleManagers = (schedule) => {
   return [];
 };
 
+const formatManagerLabel = (managerRow) => {
+  if (!managerRow) return '';
+  const roleTag = managerRow.role ? `[${managerRow.role}] ` : '';
+  return `${roleTag}${managerRow.name}`;
+};
+
 function App() {
   const [page, setPage] = useState('dashboard');
   const [rows, setRows] = useState({
@@ -361,6 +401,7 @@ function App() {
   const [editing, setEditing] = useState(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [month, setMonth] = useState(new Date());
+  const [managerSort, setManagerSort] = useState({ key: 'name', direction: 'asc' });
 
   const loadSettings = async () => {
     if (!supabase) return;
@@ -477,11 +518,17 @@ function App() {
       setForm({
         ...emptyForms.schedules,
         category: SCHEDULE_CATEGORIES[0],
+        timeEnabled: true,
         startDate: today,
         startTime: '09:00',
         endDate: today,
         endTime: '10:00',
         managers: []
+      });
+    } else if (targetTable === 'managers') {
+      setForm({
+        ...emptyForms.managers,
+        role: '매니저'
       });
     } else {
       setForm({ ...(emptyForms[targetTable] || {}) });
@@ -496,6 +543,7 @@ function App() {
     setForm({
       ...emptyForms.schedules,
       category: SCHEDULE_CATEGORIES[0],
+      timeEnabled: true,
       startDate: safeDate,
       startTime: '09:00',
       endDate: safeDate,
@@ -515,11 +563,19 @@ function App() {
         ...emptyForms.schedules,
         ...r,
         category: safeCategory,
+        timeEnabled: range.timeEnabled,
         startDate: range.startDate,
         startTime: range.startTime,
         endDate: range.endDate,
         endTime: range.endTime,
         managers: extractScheduleManagers(r)
+      });
+    } else if (targetTable === 'managers') {
+      const safeRole = MANAGER_ROLES.includes(r.role) ? r.role : '매니저';
+      setForm({
+        ...emptyForms.managers,
+        ...r,
+        role: safeRole
       });
     } else {
       setForm({ ...r });
@@ -539,19 +595,27 @@ function App() {
 
     if (table === 'schedules') {
       const startDate = payload.startDate || today;
-      const startTime = snapToHalfHour(payload.startTime || '09:00');
       const endDate = payload.endDate || startDate;
-      let endTime = snapToHalfHour(payload.endTime || addHalfHour(startTime));
+      const timeEnabled = payload.timeEnabled !== false;
 
-      const startIsoLocal = `${startDate}T${startTime}`;
-      let endIsoLocal = `${endDate}T${endTime}`;
-      if (endIsoLocal < startIsoLocal) {
-        endTime = addHalfHour(startTime);
-        endIsoLocal = `${startDate}T${endTime}`;
+      if (!timeEnabled) {
+        payload.start_at = startDate;
+        payload.end_at = endDate < startDate ? startDate : endDate;
+      } else {
+        const startTime = snapToHalfHour(payload.startTime || '09:00');
+        let endTime = snapToHalfHour(payload.endTime || addHalfHour(startTime));
+
+        const startIsoLocal = `${startDate}T${startTime}`;
+        let endIsoLocal = `${endDate}T${endTime}`;
+        if (endIsoLocal < startIsoLocal) {
+          endTime = addHalfHour(startTime);
+          endIsoLocal = `${startDate}T${endTime}`;
+        }
+
+        payload.start_at = startIsoLocal;
+        payload.end_at = endIsoLocal;
       }
 
-      payload.start_at = startIsoLocal;
-      payload.end_at = endIsoLocal;
       payload.category = SCHEDULE_CATEGORIES.includes(payload.category) ? payload.category : '프로그램';
       payload.expected_count =
         payload.expected_count !== undefined && payload.expected_count !== ''
@@ -559,10 +623,16 @@ function App() {
           : 0;
       payload.managers = Array.isArray(payload.managers) ? payload.managers : [];
 
+      delete payload.timeEnabled;
       delete payload.startDate;
       delete payload.startTime;
       delete payload.endDate;
       delete payload.endTime;
+    }
+
+    if (table === 'managers') {
+      payload.role = MANAGER_ROLES.includes(payload.role) ? payload.role : '매니저';
+      delete payload.phone;
     }
 
     if (editing) {
@@ -596,11 +666,20 @@ function App() {
     await load();
   };
 
-  const toggleFormManager = (managerName) => {
+  const toggleFormManager = (managerDisplayName) => {
     const current = Array.isArray(form.managers) ? form.managers : [];
-    const exists = current.includes(managerName);
-    const next = exists ? current.filter((m) => m !== managerName) : [...current, managerName];
+    const exists = current.includes(managerDisplayName);
+    const next = exists ? current.filter((m) => m !== managerDisplayName) : [...current, managerDisplayName];
     setForm({ ...form, managers: next });
+  };
+
+  const handleManagerSort = (key) => {
+    setManagerSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'asc' };
+    });
   };
 
   const participantName = (id) => rows.participants.find((p) => p.id === id)?.name || '참여자 정보 없음';
@@ -620,13 +699,26 @@ function App() {
 
   const filtered = useMemo(() => {
     const data = rows[tableByPage[page]] || [];
-    if (!query) return data;
-    return data.filter(
-      (r) =>
-        JSON.stringify(r).toLowerCase().includes(query.toLowerCase()) ||
-        participantName(r.participant_id).includes(query)
-    );
-  }, [rows, page, query]);
+    const searched = !query
+      ? data
+      : data.filter(
+          (r) =>
+            JSON.stringify(r).toLowerCase().includes(query.toLowerCase()) ||
+            participantName(r.participant_id).includes(query)
+        );
+
+    if (page === 'managers') {
+      const { key, direction } = managerSort;
+      const factor = direction === 'asc' ? 1 : -1;
+      return [...searched].sort((a, b) => {
+        const valA = String(a?.[key] ?? '').trim();
+        const valB = String(b?.[key] ?? '').trim();
+        return valA.localeCompare(valB, 'ko', { sensitivity: 'base' }) * factor;
+      });
+    }
+
+    return searched;
+  }, [rows, page, query, managerSort]);
 
   if (!supabase) return <SetupScreen />;
 
@@ -747,7 +839,7 @@ function App() {
                       : page === 'consultations'
                       ? '참여자 상담 이력과 후속 조치를 기록합니다.'
                       : page === 'managers'
-                      ? '일정 등록 시 선택할 담당자 명단을 미리 등록하고 관리합니다.'
+                      ? '선임 매니저와 매니저 명단을 등록하고 열 기준으로 정렬합니다.'
                       : '수료자 사후관리 활동과 참여 이력을 관리합니다.'}
                   </p>
                 </div>
@@ -774,6 +866,8 @@ function App() {
                 participantName={participantName}
                 onEdit={openEdit}
                 onDelete={remove}
+                managerSort={managerSort}
+                onSortManager={handleManagerSort}
               />
             </>
           )}
@@ -828,6 +922,17 @@ function App() {
                         </select>
                       ) : type === 'datetime_range' ? (
                         <div className="datetime-range-box">
+                          <label className="time-toggle-row">
+                            <input
+                              type="checkbox"
+                              checked={form.timeEnabled !== false}
+                              onChange={(e) =>
+                                setForm({ ...form, timeEnabled: e.target.checked })
+                              }
+                            />
+                            <span>시간 설정 사용 (체크 해제 시 날짜만 저장)</span>
+                          </label>
+
                           <div className="datetime-row">
                             <span className="range-tag">시작</span>
                             <input
@@ -847,29 +952,32 @@ function App() {
                                 });
                               }}
                             />
-                            <select
-                              value={snapToHalfHour(form.startTime || '09:00')}
-                              onChange={(e) => {
-                                const nextStartTime = e.target.value;
-                                const nextEndTime =
-                                  (form.endDate || form.startDate) === (form.startDate || today) &&
-                                  (form.endTime || '10:00') <= nextStartTime
-                                    ? addHalfHour(nextStartTime)
-                                    : form.endTime || addHalfHour(nextStartTime);
-                                setForm({
-                                  ...form,
-                                  startTime: nextStartTime,
-                                  endTime: nextEndTime
-                                });
-                              }}
-                            >
-                              {HALF_HOUR_TIMES.map((t) => (
-                                <option key={t} value={t}>
-                                  {t}
-                                </option>
-                              ))}
-                            </select>
+                            {form.timeEnabled !== false && (
+                              <select
+                                value={snapToHalfHour(form.startTime || '09:00')}
+                                onChange={(e) => {
+                                  const nextStartTime = e.target.value;
+                                  const nextEndTime =
+                                    (form.endDate || form.startDate) === (form.startDate || today) &&
+                                    (form.endTime || '10:00') <= nextStartTime
+                                      ? addHalfHour(nextStartTime)
+                                      : form.endTime || addHalfHour(nextStartTime);
+                                  setForm({
+                                    ...form,
+                                    startTime: nextStartTime,
+                                    endTime: nextEndTime
+                                  });
+                                }}
+                              >
+                                {HALF_HOUR_TIMES.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
+
                           <div className="datetime-row">
                             <span className="range-tag end">종료</span>
                             <input
@@ -881,18 +989,20 @@ function App() {
                                 setForm({ ...form, endDate: e.target.value })
                               }
                             />
-                            <select
-                              value={snapToHalfHour(form.endTime || '10:00')}
-                              onChange={(e) =>
-                                setForm({ ...form, endTime: e.target.value })
-                              }
-                            >
-                              {HALF_HOUR_TIMES.map((t) => (
-                                <option key={t} value={t}>
-                                  {t}
-                                </option>
-                              ))}
-                            </select>
+                            {form.timeEnabled !== false && (
+                              <select
+                                value={snapToHalfHour(form.endTime || '10:00')}
+                                onChange={(e) =>
+                                  setForm({ ...form, endTime: e.target.value })
+                                }
+                              >
+                                {HALF_HOUR_TIMES.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                         </div>
                       ) : type === 'multi_manager' ? (
@@ -900,17 +1010,26 @@ function App() {
                           {rows.managers && rows.managers.length > 0 ? (
                             <div className="manager-chip-grid">
                               {rows.managers.map((m) => {
+                                const displayLabel = formatManagerLabel(m);
                                 const selectedList = Array.isArray(form.managers) ? form.managers : [];
-                                const checked = selectedList.includes(m.name);
+                                const checked =
+                                  selectedList.includes(displayLabel) || selectedList.includes(m.name);
+                                const isSenior = m.role === '선임 매니저';
                                 return (
                                   <button
-                                    key={m.id || m.name}
+                                    key={m.id || displayLabel}
                                     type="button"
-                                    className={'manager-pick-btn ' + (checked ? 'selected' : '')}
-                                    onClick={() => toggleFormManager(m.name)}
+                                    className={
+                                      'manager-pick-btn ' +
+                                      (checked ? 'selected ' : '') +
+                                      (isSenior ? 'senior' : 'junior')
+                                    }
+                                    onClick={() => toggleFormManager(displayLabel)}
                                   >
+                                    <span className="mgr-role-pill">
+                                      {m.role || '매니저'}
+                                    </span>
                                     <span>{m.name}</span>
-                                    {m.role && <small>{m.role}</small>}
                                   </button>
                                 );
                               })}
@@ -1541,14 +1660,14 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
   const weekRange = getWeekRange();
   const todaySchedules = rows.schedules
     .filter((s) => s.start_at?.slice(0, 10) === today)
-    .sort((a, b) => a.start_at.localeCompare(b.start_at));
+    .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
 
   const weekSchedules = rows.schedules
     .filter((s) => {
       const d = s.start_at?.slice(0, 10);
       return d && d >= weekRange.start && d <= weekRange.end;
     })
-    .sort((a, b) => a.start_at.localeCompare(b.start_at));
+    .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
 
   const kw = (dashConfig.followup_schedule_keyword || '사후관리').trim();
   const followupSchedules = rows.schedules.filter(
@@ -1641,12 +1760,12 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
           </section>
 
           <div className="dashboard-grid" style={{ marginBottom: '18px' }}>
-            <section className="panel dash-card accent-today">
+            <section className="panel dash-card accent-today today-highlight-panel">
               <div className="panel-head dash-card-head">
                 <div>
                   <div className="title-with-count">
                     <h2>{dashConfig.today_section_title || '오늘의 일정'}</h2>
-                    <span className="count-highlight">총 {todaySchedules.length}건</span>
+                    <span className="count-highlight today-badge">총 {todaySchedules.length}건</span>
                   </div>
                   <p>{dashConfig.today_section_sub || `${today} 기준 예정 일정`}</p>
                 </div>
@@ -1657,9 +1776,11 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
               {todaySchedules.length ? (
                 todaySchedules.map((s) => {
                   const mgrs = extractScheduleManagers(s);
+                  const timeText = formatScheduleTimeRange(s);
                   return (
-                    <div className="dash-item-box" key={s.id}>
+                    <div className="dash-item-box today-schedule-highlight" key={s.id}>
                       <div className="dash-item-title-row">
+                        <span className="today-chip">오늘</span>
                         <span className="program-tag">[{s.category || '일정'}]</span>
                         <b className="dash-item-title">{s.title}</b>
                         {Number(s.expected_count) > 0 && (
@@ -1668,8 +1789,7 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                       </div>
                       <div className="dash-item-body">
                         <span className="meta-line">
-                          <Clock3 size={13} /> {formatTimeShort(s.start_at)}
-                          {s.end_at ? ` ~ ${formatTimeShort(s.end_at)}` : ''}
+                          <Clock3 size={13} /> {timeText}
                           {s.location ? ` · 장소: ${s.location}` : ''}
                           {mgrs.length ? ` · 담당: ${mgrs.join(', ')}` : ''}
                         </span>
@@ -1701,11 +1821,17 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
               {weekSchedules.length ? (
                 weekSchedules.map((s) => {
                   const mgrs = extractScheduleManagers(s);
+                  const isTodayItem = s.start_at?.slice(0, 10) === today;
+                  const timeText = formatScheduleTimeRange(s);
                   return (
-                    <div className="week-item-card" key={s.id}>
+                    <div
+                      className={'week-item-card ' + (isTodayItem ? 'today-schedule-highlight' : '')}
+                      key={s.id}
+                    >
                       <div className="program-badge-box">[{s.category || '프로그램'}]</div>
                       <div className="week-item-content">
                         <div className="dash-item-title-row">
+                          {isTodayItem && <span className="today-chip">오늘</span>}
                           <b className="dash-item-title">{s.title}</b>
                           {Number(s.expected_count) > 0 && (
                             <span className="pill">{s.expected_count}명</span>
@@ -1714,8 +1840,7 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                         <div className="dash-item-body">
                           <span className="meta-line">
                             <CalendarDays size={13} /> {formatKoreanDateShort(s.start_at)}{' '}
-                            {formatTimeShort(s.start_at)}
-                            {s.end_at ? ` ~ ${formatTimeShort(s.end_at)}` : ''}
+                            {timeText}
                             {s.location ? ` · ${s.location}` : ''}
                             {mgrs.length ? ` · 담당: ${mgrs.join(', ')}` : ''}
                           </span>
@@ -1826,7 +1951,15 @@ function Empty({ text }) {
   return <div className="empty">{text}</div>;
 }
 
-function DataTable({ page, rows, participantName, onEdit, onDelete }) {
+function DataTable({
+  page,
+  rows,
+  participantName,
+  onEdit,
+  onDelete,
+  managerSort,
+  onSortManager
+}) {
   const columns = {
     participants: [
       ['name', '이름'],
@@ -1857,8 +1990,7 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
     ],
     managers: [
       ['name', '담당자명'],
-      ['role', '담당 역할/팀'],
-      ['phone', '연락처'],
+      ['role', '담당 역할'],
       ['memo', '비고']
     ]
   };
@@ -1868,9 +2000,33 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
       <table>
         <thead>
           <tr>
-            {(columns[page] || []).map((c) => (
-              <th key={c[0]}>{c[1]}</th>
-            ))}
+            {(columns[page] || []).map(([colKey, colLabel]) => {
+              if (page === 'managers') {
+                const isSorted = managerSort?.key === colKey;
+                const dirSymbol = isSorted
+                  ? managerSort.direction === 'asc'
+                    ? '↑'
+                    : '↓'
+                  : '';
+                return (
+                  <th key={colKey}>
+                    <button
+                      type="button"
+                      className={'sort-th-btn ' + (isSorted ? 'active' : '')}
+                      onClick={() => onSortManager?.(colKey)}
+                    >
+                      <span>{colLabel}</span>
+                      {isSorted ? (
+                        <span className="sort-dir-mark">{dirSymbol}</span>
+                      ) : (
+                        <ArrowUpDown size={13} className="sort-icon-muted" />
+                      )}
+                    </button>
+                  </th>
+                );
+              }
+              return <th key={colKey}>{colLabel}</th>;
+            })}
             <th>관리</th>
           </tr>
         </thead>
@@ -1881,6 +2037,15 @@ function DataTable({ page, rows, participantName, onEdit, onDelete }) {
                 <td key={k}>
                   {k === 'participant_id' ? (
                     participantName(r[k])
+                  ) : k === 'role' && page === 'managers' ? (
+                    <span
+                      className={
+                        'role-badge ' +
+                        (r[k] === '선임 매니저' ? 'senior' : 'junior')
+                      }
+                    >
+                      {r[k] || '매니저'}
+                    </span>
                   ) : k === 'content' || k === 'memo' ? (
                     <span className="truncate">{r[k] || '-'}</span>
                   ) : (
@@ -1910,7 +2075,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
     m = month.getMonth(),
     first = new Date(year, m, 1),
     days = new Date(year, m + 1, 0).getDate(),
-    offset = (first.getDay() + 6) % 7;
+    offset = first.getDay();
   const cells = Array.from({ length: Math.ceil((offset + days) / 7) * 7 }, (_, i) => i - offset + 1);
   const items = rows.schedules || [];
 
@@ -1928,6 +2093,8 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
       })
       .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
   };
+
+  const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
 
   return (
     <>
@@ -1950,7 +2117,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
             <h2>
               {year}년 {m + 1}월
             </h2>
-            <p>구분별 색상 및 세부 정보 포함 월간 일정 캘린더</p>
+            <p>구분별 색상 및 세부 정보 포함 월간 일정 캘린더 (일~토)</p>
           </div>
           <div className="calendar-legend">
             {SCHEDULE_CATEGORIES.map((cat) => {
@@ -1982,12 +2149,20 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
         </div>
 
         <div className="calendar-grid">
-          {['월', '화', '수', '목', '금', '토', '일'].map((d) => (
-            <div className="weekday" key={d}>
+          {weekdays.map((d, idx) => (
+            <div
+              className={
+                'weekday ' + (idx === 0 ? 'sun-header' : idx === 6 ? 'sat-header' : '')
+              }
+              key={d}
+            >
               {d}
             </div>
           ))}
           {cells.map((d, i) => {
+            const colIndex = i % 7;
+            const isSunday = colIndex === 0;
+            const isSaturday = colIndex === 6;
             const isValidDay = d > 0 && d <= days;
             const dateStr = isValidDay ? getDateStr(d) : '';
             const events = isValidDay ? dayItems(d) : [];
@@ -1997,16 +2172,32 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
               m === new Date().getMonth() &&
               year === new Date().getFullYear();
 
+            const cellClasses = [
+              'calendar-cell',
+              !isValidDay ? 'outside' : 'clickable-cell',
+              isSunday ? 'sun-cell' : '',
+              isSaturday ? 'sat-cell' : ''
+            ]
+              .filter(Boolean)
+              .join(' ');
+
             return (
               <div
                 key={i}
-                className={'calendar-cell ' + (!isValidDay ? 'outside' : 'clickable-cell')}
+                className={cellClasses}
                 onClick={() => {
                   if (isValidDay) onAddOnDate(dateStr);
                 }}
               >
                 <div className="calendar-cell-top">
-                  <span className={'day-number ' + (isTodayCell ? 'today' : '')}>
+                  <span
+                    className={
+                      'day-number ' +
+                      (isTodayCell ? 'today ' : '') +
+                      (isSunday ? 'sun-num ' : '') +
+                      (isSaturday ? 'sat-num' : '')
+                    }
+                  >
                     {isValidDay ? d : ''}
                   </span>
                   {isValidDay && (
@@ -2028,9 +2219,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
                   events.map((s) => {
                     const st = getCategoryStyle(s.category);
                     const mgrs = extractScheduleManagers(s);
-                    const startT = formatTimeShort(s.start_at);
-                    const endT = formatTimeShort(s.end_at);
-                    const timeLabel = startT ? (endT ? `${startT}~${endT}` : startT) : '';
+                    const timeLabel = formatScheduleTimeRange(s);
 
                     return (
                       <button
