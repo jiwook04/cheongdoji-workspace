@@ -1318,3 +1318,276 @@
   padding: 10px 14px;
   background: #ffffff;
 }
+/* 로그인 · 회원가입 화면 스타일 */
+.auth-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #f1f5f9;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 32px 28px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  text-align: center;
+}
+
+.auth-card .brand-mark {
+  margin: 0 auto 14px;
+}
+
+.auth-card h1 {
+  margin: 4px 0 6px;
+  font-size: 22px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 20px;
+  text-align: left;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.auth-submit-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 11px 16px;
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.auth-switch-box {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.auth-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.auth-notice {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+/* 로그인 화면 중앙 세로 정렬 및 하단 전환 영역 간격 보정 */
+.auth-shell {
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 20px;
+  background: #f1f5f9;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 34px 28px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-card .brand-mark {
+  margin: 0 auto 14px;
+}
+
+.auth-card h1 {
+  margin: 4px 0 6px;
+  font-size: 22px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 20px;
+  text-align: left;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.auth-submit-btn {
+  width: 100%;
+  justify-content: center;
+  padding: 11px 16px;
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.auth-switch-box {
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.auth-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.auth-notice {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+/* 대시보드 오늘 일정 스타일 통일 및 모집 일정 틴트 컬러 */
+.today-style-card {
+  background: #eff6ff;
+  border: 1.5px solid #93c5fd;
+  border-left: 4px solid #2563eb;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+.recruit-row.recruit-tinted {
+  background: #f8fafc;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+/* 사업단 일정 제목 밑 [장소·참여인원] 한 줄, [담당자] 다음 줄 구분 */
+.cal-ev-line-loc-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.cal-ev-line-managers {
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+/* 참여자 이름 자동완성 드롭다운 및 테이블 인라인 컨트롤 */
+.name-suggestion-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  margin-top: 4px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.name-suggestion-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.name-suggestion-item:last-child {
+  border-bottom: none;
+}
+
+.name-suggestion-item:hover {
+  background: #eff6ff;
+}
+
+.inline-table-select,
+.inline-date-input {
+  padding: 5px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  font-size: 12px;
+  color: #1e293b;
+}
+
+.table-checkbox-wrap,
+.checkbox-inline-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+}

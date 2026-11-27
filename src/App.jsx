@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
   LayoutDashboard,
   CalendarDays,
   Users,
   ClipboardCheck,
-  MessageSquareText,
   GraduationCap,
+  Link2,
   ChartNoAxesCombined,
   Plus,
   Search,
@@ -26,7 +26,8 @@ import {
   ArrowDown,
   Trash2,
   ArrowUpDown,
-  LogOut
+  LogOut,
+  FileSpreadsheet
 } from 'lucide-react';
 import AuthScreen from './AuthScreen';
 
@@ -36,10 +37,10 @@ const supabase = url && anon ? createClient(url, anon) : null;
 
 const nav = [
   ['dashboard', '대시보드', LayoutDashboard],
-  ['schedules', '일정 관리', CalendarDays],
+  ['schedules', '사업단 일정', CalendarDays],
   ['participants', '참여자 관리', Users],
   ['attendance', '출결 관리', ClipboardCheck],
-  ['consultations', '상담 관리', MessageSquareText],
+  ['consultations', '사후연계', Link2],
   ['followups', '사후관리', GraduationCap],
   ['managers', '담당자 관리', UserCheck],
   ['stats', '성과 통계', ChartNoAxesCombined],
@@ -50,6 +51,17 @@ const DEFAULT_MENU_ORDER = nav.filter(([id]) => id !== 'settings').map(([id]) =>
 
 const SCHEDULE_CATEGORIES = ['프로그램', '사후관리', '행사', '기타'];
 const MANAGER_ROLES = ['선임 매니저', '매니저'];
+
+const DEFAULT_COHORT_OPTIONS = ['1기', '2기', '3기', '4기'];
+
+const LINKAGE_PROGRAM_PRESETS = [
+  '국민취업지원제도',
+  '미래내일 일경험',
+  '직업훈련',
+  '구직자 도약 패키지'
+];
+
+const LINKAGE_DOC_STATUSES = ['서류 제출전', '서류 제출완료'];
 
 const CATEGORY_STYLES = {
   '프로그램': {
@@ -117,6 +129,10 @@ const hasExplicitTime = (rawStr) => {
   return /^\d{2}:\d{2}/.test(timePart);
 };
 
+const pad2 = (n) => String(n).padStart(2, '0');
+const formatLocalDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const today = formatLocalDate(new Date());
+
 const parseRangeFromSchedule = (record) => {
   const fallbackDate = today;
   const startRaw = record?.start_at || `${fallbackDate}T09:00`;
@@ -137,7 +153,8 @@ const parseRangeFromSchedule = (record) => {
 const DEFAULT_RECRUIT_COHORTS = {
   '1기': { short: '2026.12.01 ~ 2026.12.14', mid: '2026.12.01 ~ 2026.12.20', long: '2026.12.01 ~ 2026.12.28' },
   '2기': { short: '', mid: '', long: '' },
-  '3기': { short: '', mid: '', long: '' }
+  '3기': { short: '', mid: '', long: '' },
+  '4기': { short: '', mid: '', long: '' }
 };
 
 const DEFAULT_DASHBOARD_CONFIG = {
@@ -173,10 +190,6 @@ const DEFAULT_SETTINGS = {
   menu_order: DEFAULT_MENU_ORDER,
   dashboard_config: DEFAULT_DASHBOARD_CONFIG
 };
-
-const pad2 = (n) => String(n).padStart(2, '0');
-const formatLocalDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-const today = formatLocalDate(new Date());
 
 const getWeekRange = () => {
   const now = new Date();
@@ -270,6 +283,111 @@ const normalizeDashboardConfig = (raw) => {
   };
 };
 
+const parseLinkageMeta = (record) => {
+  let meta = {};
+  if (record?.next_action && typeof record.next_action === 'string') {
+    const trimmed = record.next_action.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        meta = JSON.parse(trimmed);
+      } catch (_) {
+        meta = { note: trimmed };
+      }
+    } else if (trimmed) {
+      meta = { note: trimmed };
+    }
+  }
+  const participantName = record?.participant_name || meta.participant_name || '';
+  const cohort = record?.cohort || meta.cohort || '1기';
+  const program =
+    record?.category && record.category !== '기타'
+      ? record.category
+      : meta.program || record?.category || '국민취업지원제도';
+  const docStatus = LINKAGE_DOC_STATUSES.includes(meta.doc_status)
+    ? meta.doc_status
+    : '서류 제출전';
+  const completed = Boolean(meta.completed);
+  const note =
+    record?.content !== undefined && record?.content !== null
+      ? String(record.content)
+      : String(meta.note || '');
+
+  return {
+    participant_name: participantName,
+    cohort,
+    program,
+    doc_status: docStatus,
+    completed,
+    note
+  };
+};
+
+const parseFollowupDates = (record) => {
+  let parsed = {};
+  if (record?.memo && typeof record.memo === 'string') {
+    const trimmed = record.memo.trim();
+    if (trimmed.startsWith('{')) {
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch (_) {
+        parsed = { note: trimmed };
+      }
+    } else if (trimmed) {
+      parsed = { note: trimmed };
+    }
+  }
+  return {
+    participant_name: record?.participant_name || parsed.participant_name || '',
+    cohort: record?.cohort || parsed.cohort || '1기',
+    round1_date: parsed.round1_date || '',
+    round2_date: parsed.round2_date || '',
+    round3_date: parsed.round3_date || '',
+    note: parsed.note !== undefined ? String(parsed.note) : String(record?.activity_name || '')
+  };
+};
+
+const parseSpreadsheetText = (rawText) => {
+  const lines = String(rawText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return [];
+
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  const splitRow = (line) => {
+    const out = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === delimiter && !inQuotes) {
+        out.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    out.push(cur.trim());
+    return out;
+  };
+
+  const rowsParsed = lines.map(splitRow);
+  const firstCells = rowsParsed[0].map((c) => c.replace(/\s+/g, ''));
+  const hasHeader =
+    firstCells.includes('이름') ||
+    firstCells.includes('성명') ||
+    firstCells.toLowerCase().includes('name');
+
+  return hasHeader ? rowsParsed.slice(1) : rowsParsed;
+};
+
 const emptyForms = {
   participants: { name: '', phone: '', cohort: '1기', manager: '', status: '참여중', memo: '' },
   schedules: {
@@ -288,8 +406,25 @@ const emptyForms = {
     description: ''
   },
   attendance: { participant_id: '', attend_date: today, status: '출석', memo: '' },
-  consultations: { participant_id: '', consulted_at: today, manager: '', category: '진로·취업', content: '', next_action: '' },
-  followups: { participant_id: '', activity_date: today, activity_name: '', status: '참여', memo: '' },
+  consultations: {
+    participant_id: '',
+    participant_name: '',
+    cohort: '1기',
+    program: '국민취업지원제도',
+    customProgram: '',
+    doc_status: '서류 제출전',
+    completed: false,
+    note: ''
+  },
+  followups: {
+    participant_id: '',
+    participant_name: '',
+    cohort: '1기',
+    round1_date: '',
+    round2_date: '',
+    round3_date: '',
+    note: ''
+  },
   managers: { name: '', role: '매니저', memo: '' }
 };
 
@@ -304,58 +439,12 @@ const tableByPage = {
 
 const titles = {
   participants: '참여자 관리',
-  schedules: '일정 관리',
+  schedules: '사업단 일정',
   attendance: '출결 관리',
-  consultations: '상담 관리',
+  consultations: '사후연계',
   followups: '사후관리',
   managers: '담당자 관리',
   settings: '사이트 설정'
-};
-
-const fields = {
-  participants: [
-    ['name', '이름', 'text'],
-    ['phone', '연락처', 'text'],
-    ['cohort', '기수', 'select', ['1기', '2기', '3기', '4기', '5기', '기타']],
-    ['manager', '담당자', 'text'],
-    ['status', '참여 상태', 'select', ['참여중', '수료', '중도탈락', '대기']],
-    ['memo', '메모', 'textarea']
-  ],
-  schedules: [
-    ['title', '일정명', 'text'],
-    ['category', '구분', 'select', SCHEDULE_CATEGORIES],
-    ['datetime_range', '시작·종료 일시', 'datetime_range'],
-    ['location', '장소', 'text'],
-    ['expected_count', '참여 인원(명)', 'number'],
-    ['managers', '담당자', 'multi_manager'],
-    ['description', '내용', 'textarea']
-  ],
-  attendance: [
-    ['participant_id', '참여자', 'participant'],
-    ['attend_date', '일자', 'date'],
-    ['status', '출결 상태', 'select', ['출석', '지각', '조퇴', '결석', '공결']],
-    ['memo', '비고', 'text']
-  ],
-  consultations: [
-    ['participant_id', '참여자', 'participant'],
-    ['consulted_at', '상담일', 'date'],
-    ['manager', '상담자', 'text'],
-    ['category', '상담 구분', 'select', ['진로·취업', '심리·정서', '생활', '프로그램', '기타']],
-    ['content', '상담 내용', 'textarea'],
-    ['next_action', '후속 조치', 'textarea']
-  ],
-  followups: [
-    ['participant_id', '참여자', 'participant'],
-    ['activity_date', '활동일', 'date'],
-    ['activity_name', '활동명', 'text'],
-    ['status', '참여 여부', 'select', ['참여', '불참', '취소']],
-    ['memo', '비고', 'textarea']
-  ],
-  managers: [
-    ['name', '담당자명', 'text'],
-    ['role', '담당 역할', 'select', MANAGER_ROLES],
-    ['memo', '비고', 'textarea']
-  ]
 };
 
 const stripRolePrefix = (rawName) =>
@@ -436,11 +525,35 @@ function App() {
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [modal, setModal] = useState(false);
+  const [bulkModal, setBulkModal] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const excelFileInputRef = useRef(null);
+
   const [form, setForm] = useState({});
   const [editing, setEditing] = useState(null);
   const [mobileNav, setMobileNav] = useState(false);
   const [month, setMonth] = useState(new Date());
   const [managerSort, setManagerSort] = useState({ key: 'name', direction: 'asc' });
+  const [linkageSort, setLinkageSort] = useState({ key: 'name', direction: 'asc' });
+  const [followupSort, setFollowupSort] = useState({ key: 'name', direction: 'asc' });
+  const [extraCohorts, setExtraCohorts] = useState([]);
+  const [newCohortInput, setNewCohortInput] = useState('');
+  const [showNameSuggestions, setShowNameSuggestions] = useState(false);
+
+  const cohortOptions = useMemo(() => {
+    const set = new Set(DEFAULT_COHORT_OPTIONS);
+    (rows.participants || []).forEach((p) => {
+      if (p.cohort) set.add(String(p.cohort).trim());
+    });
+    Object.keys(siteConfig?.dashboard_config?.recruit_cohorts || {}).forEach((ck) => {
+      if (ck) set.add(String(ck).trim());
+    });
+    extraCohorts.forEach((c) => {
+      if (c) set.add(String(c).trim());
+    });
+    return Array.from(set);
+  }, [rows.participants, siteConfig?.dashboard_config?.recruit_cohorts, extraCohorts]);
 
   const loadSettings = async () => {
     if (!supabase) return;
@@ -568,9 +681,39 @@ function App() {
     setSavedNotice('설정이 저장되었습니다.');
   };
 
+  const resolveParticipantName = (record) => {
+    if (record?.participant_id) {
+      const found = rows.participants.find((p) => p.id === record.participant_id);
+      if (found?.name) return found.name;
+    }
+    if (record?.participant_name) return record.participant_name;
+    if (record?.memo) {
+      const trimmed = String(record.memo).trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.participant_name) return parsed.participant_name;
+        } catch (_) {}
+      }
+    }
+    if (record?.next_action) {
+      const trimmed = String(record.next_action).trim();
+      if (trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed.participant_name) return parsed.participant_name;
+        } catch (_) {}
+      }
+    }
+    return '참여자 정보 없음';
+  };
+
   const openNew = () => {
     const targetTable = tableByPage[page] || 'schedules';
     setEditing(null);
+    setShowNameSuggestions(false);
+    setNewCohortInput('');
+
     if (targetTable === 'schedules') {
       setForm({
         ...emptyForms.schedules,
@@ -586,6 +729,25 @@ function App() {
       setForm({
         ...emptyForms.managers,
         role: '매니저'
+      });
+    } else if (targetTable === 'consultations') {
+      setForm({
+        ...emptyForms.consultations,
+        cohort: '1기',
+        program: LINKAGE_PROGRAM_PRESETS[0],
+        customProgram: '',
+        doc_status: '서류 제출전',
+        completed: false,
+        note: ''
+      });
+    } else if (targetTable === 'followups') {
+      setForm({
+        ...emptyForms.followups,
+        cohort: '1기',
+        round1_date: '',
+        round2_date: '',
+        round3_date: '',
+        note: ''
       });
     } else {
       setForm({ ...(emptyForms[targetTable] || {}) });
@@ -613,6 +775,9 @@ function App() {
   const openEdit = (r) => {
     const targetTable = tableByPage[page] || 'schedules';
     setEditing(r.id);
+    setShowNameSuggestions(false);
+    setNewCohortInput('');
+
     if (targetTable === 'schedules') {
       const range = parseRangeFromSchedule(r);
       const safeCategory = SCHEDULE_CATEGORIES.includes(r.category) ? r.category : SCHEDULE_CATEGORIES[0];
@@ -634,10 +799,106 @@ function App() {
         ...r,
         role: safeRole
       });
+    } else if (targetTable === 'consultations') {
+      const meta = parseLinkageMeta(r);
+      const isPreset = LINKAGE_PROGRAM_PRESETS.includes(meta.program);
+      setForm({
+        ...emptyForms.consultations,
+        ...r,
+        participant_name: meta.participant_name || resolveParticipantName(r),
+        cohort: meta.cohort || '1기',
+        program: isPreset ? meta.program : '직접 입력',
+        customProgram: isPreset ? '' : meta.program,
+        doc_status: meta.doc_status,
+        completed: meta.completed,
+        note: meta.note
+      });
+    } else if (targetTable === 'followups') {
+      const fu = parseFollowupDates(r);
+      setForm({
+        ...emptyForms.followups,
+        ...r,
+        participant_name: fu.participant_name || resolveParticipantName(r),
+        cohort: fu.cohort || '1기',
+        round1_date: fu.round1_date,
+        round2_date: fu.round2_date,
+        round3_date: fu.round3_date,
+        note: fu.note
+      });
     } else {
       setForm({ ...r });
     }
     setModal(true);
+  };
+
+  const buildLinkagePayload = (srcForm, actorName) => {
+    const chosenProgram =
+      srcForm.program === '직접 입력'
+        ? String(srcForm.customProgram || '').trim() || '기타'
+        : srcForm.program || LINKAGE_PROGRAM_PRESETS[0];
+
+    const docStatus = LINKAGE_DOC_STATUSES.includes(srcForm.doc_status)
+      ? srcForm.doc_status
+      : '서류 제출전';
+
+    const completed = Boolean(srcForm.completed);
+    const participantName = String(srcForm.participant_name || '').trim();
+    const cohort = String(srcForm.cohort || '1기').trim();
+    const note = String(srcForm.note || '').trim();
+
+    const matchedParticipant = rows.participants.find(
+      (p) => String(p.name || '').trim() === participantName
+    );
+
+    const metaJson = JSON.stringify({
+      participant_name: participantName,
+      cohort,
+      program: chosenProgram,
+      doc_status: docStatus,
+      completed,
+      note
+    });
+
+    return {
+      participant_id: matchedParticipant?.id || srcForm.participant_id || null,
+      consulted_at: srcForm.consulted_at || today,
+      manager: srcForm.manager || actorName || '담당자',
+      category: chosenProgram,
+      content: note,
+      next_action: metaJson
+    };
+  };
+
+  const buildFollowupPayload = (srcForm, actorName) => {
+    const participantName = String(srcForm.participant_name || '').trim();
+    const cohort = String(srcForm.cohort || '1기').trim();
+    const round1_date = srcForm.round1_date || '';
+    const round2_date = srcForm.round2_date || '';
+    const round3_date = srcForm.round3_date || '';
+    const note = String(srcForm.note || '').trim();
+
+    const matchedParticipant = rows.participants.find(
+      (p) => String(p.name || '').trim() === participantName
+    );
+
+    const memoJson = JSON.stringify({
+      participant_name: participantName,
+      cohort,
+      round1_date,
+      round2_date,
+      round3_date,
+      note
+    });
+
+    const latestDate = round3_date || round2_date || round1_date || srcForm.activity_date || today;
+
+    return {
+      participant_id: matchedParticipant?.id || srcForm.participant_id || null,
+      activity_date: latestDate,
+      activity_name: note || '사후관리',
+      status: actorName || '참여',
+      memo: memoJson
+    };
   };
 
   const save = async (e) => {
@@ -645,7 +906,8 @@ function App() {
     const table = tableByPage[page];
     if (!table || !supabase) return;
 
-    const payload = { ...form };
+    const actorName = session?.user?.user_metadata?.full_name || '담당자';
+    let payload = { ...form };
     delete payload.id;
     delete payload.created_at;
     delete payload.updated_at;
@@ -687,11 +949,13 @@ function App() {
       delete payload.startTime;
       delete payload.endDate;
       delete payload.endTime;
-    }
-
-    if (table === 'managers') {
+    } else if (table === 'managers') {
       payload.role = MANAGER_ROLES.includes(payload.role) ? payload.role : '매니저';
       delete payload.phone;
+    } else if (table === 'consultations') {
+      payload = buildLinkagePayload(form, actorName);
+    } else if (table === 'followups') {
+      payload = buildFollowupPayload(form, actorName);
     }
 
     if (editing) {
@@ -709,6 +973,160 @@ function App() {
     }
     setModal(false);
     await load();
+  };
+
+  const updateLinkageRowInline = async (row, patchMeta) => {
+    if (!supabase || !row?.id) return;
+    const currentMeta = parseLinkageMeta(row);
+    const nextMeta = { ...currentMeta, ...patchMeta };
+    const updatedPayload = {
+      category: nextMeta.program,
+      content: nextMeta.note,
+      next_action: JSON.stringify(nextMeta)
+    };
+    const { error: upErr } = await supabase
+      .from('consultations')
+      .update(updatedPayload)
+      .eq('id', row.id);
+    if (upErr) {
+      setError(upErr.message);
+      return;
+    }
+    await load();
+  };
+
+  const updateFollowupRoundInline = async (row, patchMeta) => {
+    if (!supabase || !row?.id) return;
+    const currentMeta = parseFollowupDates(row);
+    const nextMeta = { ...currentMeta, ...patchMeta };
+    const latestDate =
+      nextMeta.round3_date || nextMeta.round2_date || nextMeta.round1_date || row.activity_date || today;
+    const updatedPayload = {
+      activity_date: latestDate,
+      activity_name: nextMeta.note || '사후관리',
+      memo: JSON.stringify(nextMeta)
+    };
+    const { error: upErr } = await supabase
+      .from('followups')
+      .update(updatedPayload)
+      .eq('id', row.id);
+    if (upErr) {
+      setError(upErr.message);
+      return;
+    }
+    await load();
+  };
+
+  const handleBulkImportSubmit = async (e) => {
+    e.preventDefault();
+    if (!supabase) return;
+    const rowsToImport = parseSpreadsheetText(bulkText);
+    if (!rowsToImport.length) {
+      setError('등록할 행 데이터를 입력하거나 파일을 선택해 주세요.');
+      return;
+    }
+
+    const actorName = session?.user?.user_metadata?.full_name || '담당자';
+    setBulkBusy(true);
+    setError('');
+
+    try {
+      if (page === 'consultations') {
+        const insertList = rowsToImport
+          .map((cells) => {
+            const nameVal = (cells[0] || '').trim();
+            if (!nameVal) return null;
+            const cohortVal = (cells[1] || '1기').trim();
+            const programVal = (cells[2] || LINKAGE_PROGRAM_PRESETS[0]).trim();
+            const docVal = LINKAGE_DOC_STATUSES.includes(cells[3]) ? cells[3] : '서류 제출전';
+            const noteVal = (cells[4] || '').trim();
+            const completedVal = /^(y|yes|true|1|완료|o)$/i.test(String(cells[5] || '').trim());
+
+            return buildLinkagePayload(
+              {
+                participant_name: nameVal,
+                cohort: cohortVal,
+                program: LINKAGE_PROGRAM_PRESETS.includes(programVal) ? programVal : '직접 입력',
+                customProgram: LINKAGE_PROGRAM_PRESETS.includes(programVal) ? '' : programVal,
+                doc_status: docVal,
+                completed: completedVal,
+                note: noteVal
+              },
+              actorName
+            );
+          })
+          .filter(Boolean);
+
+        if (!insertList.length) {
+          setError('유효한 참여자 이름 행이 없습니다.');
+          return;
+        }
+        const { error: insErr } = await supabase.from('consultations').insert(insertList);
+        if (insErr) {
+          setError(insErr.message);
+          return;
+        }
+      } else if (page === 'followups') {
+        const insertList = rowsToImport
+          .map((cells) => {
+            const nameVal = (cells[0] || '').trim();
+            if (!nameVal) return null;
+            const cohortVal = (cells[1] || '1기').trim();
+            const r1 = (cells[2] || '').trim();
+            const r2 = (cells[3] || '').trim();
+            const r3 = (cells[4] || '').trim();
+            const noteVal = (cells[5] || '').trim();
+
+            return buildFollowupPayload(
+              {
+                participant_name: nameVal,
+                cohort: cohortVal,
+                round1_date: r1,
+                round2_date: r2,
+                round3_date: r3,
+                note: noteVal
+              },
+              actorName
+            );
+          })
+          .filter(Boolean);
+
+        if (!insertList.length) {
+          setError('유효한 참여자 이름 행이 없습니다.');
+          return;
+        }
+        const { error: insErr } = await supabase.from('followups').insert(insertList);
+        if (insErr) {
+          setError(insErr.message);
+          return;
+        }
+      }
+
+      setBulkModal(false);
+      setBulkText('');
+      await load();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const handleExcelFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setBulkText(String(reader.result || ''));
+    };
+    reader.readAsText(file, 'utf-8');
+    e.target.value = '';
+  };
+
+  const handleAddNewCohort = () => {
+    const trimmed = newCohortInput.trim();
+    if (!trimmed) return;
+    setExtraCohorts((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
+    setForm((prev) => ({ ...prev, cohort: trimmed }));
+    setNewCohortInput('');
   };
 
   const remove = async (id) => {
@@ -735,6 +1153,24 @@ function App() {
 
   const handleManagerSort = (key) => {
     setManagerSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const handleLinkageSort = (key) => {
+    setLinkageSort((prev) => {
+      if (prev.key === key) {
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'asc' };
+    });
+  };
+
+  const handleFollowupSort = (key) => {
+    setFollowupSort((prev) => {
       if (prev.key === key) {
         return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
       }
@@ -775,15 +1211,32 @@ function App() {
     return { seniors, juniors };
   }, [rows.managers]);
 
+  const suggestedParticipants = useMemo(() => {
+    const typed = String(form.participant_name || '').trim().toLowerCase();
+    const list = rows.participants || [];
+    if (!typed) return list.slice(0, 8);
+    return list.filter(
+      (p) =>
+        String(p.name || '').toLowerCase().includes(typed) ||
+        String(p.cohort || '').toLowerCase().includes(typed)
+    );
+  }, [rows.participants, form.participant_name]);
+
   const filtered = useMemo(() => {
     const data = rows[tableByPage[page]] || [];
     const searched = !query
       ? data
-      : data.filter(
-          (r) =>
+      : data.filter((r) => {
+          const meta = parseLinkageMeta(r);
+          const fu = parseFollowupDates(r);
+          return (
             JSON.stringify(r).toLowerCase().includes(query.toLowerCase()) ||
-            participantName(r.participant_id).includes(query)
-        );
+            participantName(r.participant_id).includes(query) ||
+            meta.participant_name.includes(query) ||
+            meta.program.includes(query) ||
+            fu.participant_name.includes(query)
+          );
+        });
 
     if (page === 'managers') {
       const { key, direction } = managerSort;
@@ -795,8 +1248,44 @@ function App() {
       });
     }
 
+    if (page === 'consultations') {
+      const { key, direction } = linkageSort;
+      const factor = direction === 'asc' ? 1 : -1;
+      const getVal = (item) => {
+        const m = parseLinkageMeta(item);
+        if (key === 'name') return m.participant_name || participantName(item.participant_id);
+        if (key === 'cohort') return m.cohort;
+        if (key === 'program') return m.program;
+        if (key === 'doc_status') return m.doc_status;
+        if (key === 'note') return m.note;
+        if (key === 'completed') return m.completed ? '1' : '0';
+        return '';
+      };
+      return [...searched].sort(
+        (a, b) => String(getVal(a)).localeCompare(String(getVal(b)), 'ko', { sensitivity: 'base' }) * factor
+      );
+    }
+
+    if (page === 'followups') {
+      const { key, direction } = followupSort;
+      const factor = direction === 'asc' ? 1 : -1;
+      const getVal = (item) => {
+        const f = parseFollowupDates(item);
+        if (key === 'name') return f.participant_name || participantName(item.participant_id);
+        if (key === 'cohort') return f.cohort;
+        if (key === 'round1') return f.round1_date;
+        if (key === 'round2') return f.round2_date;
+        if (key === 'round3') return f.round3_date;
+        if (key === 'note') return f.note;
+        return '';
+      };
+      return [...searched].sort(
+        (a, b) => String(getVal(a)).localeCompare(String(getVal(b)), 'ko', { sensitivity: 'base' }) * factor
+      );
+    }
+
     return searched;
-  }, [rows, page, query, managerSort]);
+  }, [rows, page, query, managerSort, linkageSort, followupSort]);
 
   if (!supabase) return <SetupScreen />;
   if (!authReady) return null;
@@ -825,6 +1314,8 @@ function App() {
       </button>
     );
   };
+
+  const supportsBulkUpload = page === 'consultations' || page === 'followups';
 
   return (
     <div className="app-shell">
@@ -947,29 +1438,48 @@ function App() {
                       : page === 'attendance'
                       ? '참여자별 출결 내역을 기록하고 확인합니다.'
                       : page === 'consultations'
-                      ? '참여자 상담 이력과 후속 조치를 기록합니다.'
+                      ? '참여자별 사후연계 프로그램, 서류 제출상태 및 완료 여부를 관리합니다.'
                       : page === 'managers'
                       ? '선임 매니저와 매니저 명단을 등록하고 열 기준으로 정렬합니다.'
-                      : '수료자 사후관리 활동과 참여 이력을 관리합니다.'}
+                      : '수료자 사후관리 대상 참여자와 1차·2차·3차 진행 일자를 관리합니다.'}
                   </p>
                 </div>
-                <button className="primary" onClick={openNew}>
-                  <Plus size={17} /> 새로 등록
-                </button>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {supportsBulkUpload && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setBulkText('');
+                        setBulkModal(true);
+                      }}
+                    >
+                      <FileSpreadsheet size={16} /> 엑셀 일괄 등록
+                    </button>
+                  )}
+                  <button className="primary" onClick={openNew}>
+                    <Plus size={17} />{' '}
+                    {page === 'consultations' || page === 'followups'
+                      ? '참여자 등록'
+                      : '새로 등록'}
+                  </button>
+                </div>
               </div>
+
               <div className="toolbar">
                 <div className="search">
                   <Search size={17} />
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="이름, 내용, 담당자 검색"
+                    placeholder="이름, 기수, 프로그램, 특이사항 검색"
                   />
                 </div>
                 <span className="count">
                   총 <b>{filtered.length}</b>건
                 </span>
               </div>
+
               <DataTable
                 page={page}
                 rows={filtered}
@@ -978,6 +1488,20 @@ function App() {
                 onDelete={remove}
                 managerSort={managerSort}
                 onSortManager={handleManagerSort}
+                linkageSort={linkageSort}
+                onSortLinkage={handleLinkageSort}
+                onToggleLinkageCompleted={(row) => {
+                  const m = parseLinkageMeta(row);
+                  updateLinkageRowInline(row, { completed: !m.completed });
+                }}
+                onChangeLinkageDocStatus={(row, nextStatus) => {
+                  updateLinkageRowInline(row, { doc_status: nextStatus });
+                }}
+                followupSort={followupSort}
+                onSortFollowup={handleFollowupSort}
+                onChangeFollowupRound={(row, roundKey, nextDate) => {
+                  updateFollowupRoundInline(row, { [roundKey]: nextDate });
+                }}
               />
             </>
           )}
@@ -990,6 +1514,75 @@ function App() {
         </div>
       </main>
 
+      {bulkModal && supportsBulkUpload && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setBulkModal(false);
+          }}
+        >
+          <div className="modal">
+            <div className="modal-head">
+              <div>
+                <p className="eyebrow">BULK IMPORT</p>
+                <h2>{pageTitle} 엑셀 일괄 등록</h2>
+              </div>
+              <button className="icon-btn" onClick={() => setBulkModal(false)}>
+                <X />
+              </button>
+            </div>
+
+            <form onSubmit={handleBulkImportSubmit}>
+              <div className="form-grid">
+                <div className="wide">
+                  <p className="muted" style={{ marginTop: 0 }}>
+                    {page === 'consultations'
+                      ? '엑셀에서 행을 복사해 붙여넣거나 CSV 파일을 선택하세요. 열 순서: 이름, 기수, 사후연계 프로그램, 서류 제출상태(서류 제출전/서류 제출완료), 특이사항'
+                      : '엑셀에서 행을 복사해 붙여넣거나 CSV 파일을 선택하세요. 열 순서: 이름, 기수, 사후관리 1차(YYYY-MM-DD), 사후관리 2차(YYYY-MM-DD), 사후관리 3차(YYYY-MM-DD), 특이사항'}
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                    <input
+                      ref={excelFileInputRef}
+                      type="file"
+                      accept=".csv,.tsv,.txt"
+                      style={{ display: 'none' }}
+                      onChange={handleExcelFileUpload}
+                    />
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => excelFileInputRef.current?.click()}
+                    >
+                      <FileSpreadsheet size={15} /> CSV/텍스트 파일 선택
+                    </button>
+                  </div>
+                  <textarea
+                    rows="7"
+                    placeholder={
+                      page === 'consultations'
+                        ? '홍길동\t1기\t국민취업지원제도\t서류 제출전\t상담 완료\n김영희\t2기\t미래내일 일경험\t서류 제출완료\t서류 확인됨'
+                        : '홍길동\t1기\t2026-11-10\t2026-11-24\t\t1·2차 완료\n김영희\t2기\t2026-11-12\t\t\t1차 진행'
+                    }
+                    value={bulkText}
+                    onChange={(e) => setBulkText(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ marginTop: '18px' }}>
+                <button type="button" className="secondary" onClick={() => setBulkModal(false)}>
+                  취소
+                </button>
+                <button type="submit" className="primary" disabled={bulkBusy}>
+                  {bulkBusy ? '등록 중...' : '일괄 등록하기'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {modal && (
         <div
           className="modal-backdrop"
@@ -1001,36 +1594,322 @@ function App() {
             <div className="modal-head">
               <div>
                 <p className="eyebrow">{editing ? 'EDIT RECORD' : 'NEW RECORD'}</p>
-                <h2>{editing ? '정보 수정' : titles[page] + ' 등록'}</h2>
+                <h2>
+                  {editing
+                    ? '정보 수정'
+                    : page === 'consultations' || page === 'followups'
+                    ? '참여자 등록'
+                    : titles[page] + ' 등록'}
+                </h2>
               </div>
               <button className="icon-btn" onClick={() => setModal(false)}>
                 <X />
               </button>
             </div>
-            <form onSubmit={save}>
-              <div className="form-grid">
-                {(fields[page] || []).map(([key, label, type, options]) => {
-                  const isWide =
-                    type === 'textarea' ||
-                    type === 'datetime_range' ||
-                    type === 'multi_manager' ||
-                    key === 'title';
 
-                  return (
-                    <label className={isWide ? 'wide' : ''} key={key}>
-                      {label}
-                      {type === 'select' ? (
+            <form onSubmit={save}>
+              {page === 'consultations' ? (
+                <div className="form-grid">
+                  <label className="wide" style={{ position: 'relative' }}>
+                    이름
+                    <input
+                      type="text"
+                      required
+                      placeholder="참여자 이름 입력"
+                      value={form.participant_name || ''}
+                      onFocus={() => setShowNameSuggestions(true)}
+                      onBlur={() => setTimeout(() => setShowNameSuggestions(false), 160)}
+                      onChange={(e) => {
+                        setForm({ ...form, participant_name: e.target.value });
+                        setShowNameSuggestions(true);
+                      }}
+                    />
+                    {showNameSuggestions && suggestedParticipants.length > 0 && (
+                      <div className="name-suggestion-dropdown">
+                        {suggestedParticipants.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className="name-suggestion-item"
+                            onMouseDown={() => {
+                              setForm({
+                                ...form,
+                                participant_name: p.name,
+                                participant_id: p.id,
+                                cohort: p.cohort || form.cohort || '1기'
+                              });
+                              setShowNameSuggestions(false);
+                            }}
+                          >
+                            <b>{p.name}</b>
+                            <small>{p.cohort || '기수 미지정'}</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </label>
+
+                  <label className="wide">
+                    기수
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <select
+                        style={{ flex: 1, minWidth: '140px' }}
+                        value={form.cohort || '1기'}
+                        onChange={(e) => setForm({ ...form, cohort: e.target.value })}
+                      >
+                        {cohortOptions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="새 기수 추가 (예: 5기)"
+                        style={{ width: '150px' }}
+                        value={newCohortInput}
+                        onChange={(e) => setNewCohortInput(e.target.value)}
+                      />
+                      <button type="button" className="secondary" onClick={handleAddNewCohort}>
+                        기수 추가
+                      </button>
+                    </div>
+                  </label>
+
+                  <label className="wide">
+                    사후연계 프로그램
+                    <select
+                      value={form.program || LINKAGE_PROGRAM_PRESETS[0]}
+                      onChange={(e) => setForm({ ...form, program: e.target.value })}
+                    >
+                      {LINKAGE_PROGRAM_PRESETS.map((prog) => (
+                        <option key={prog} value={prog}>
+                          {prog}
+                        </option>
+                      ))}
+                      <option value="직접 입력">직접 입력</option>
+                    </select>
+                  </label>
+
+                  {form.program === '직접 입력' && (
+                    <label className="wide">
+                      사후연계 프로그램 직접 입력
+                      <input
+                        type="text"
+                        required
+                        placeholder="프로그램명을 직접 입력하세요"
+                        value={form.customProgram || ''}
+                        onChange={(e) => setForm({ ...form, customProgram: e.target.value })}
+                      />
+                    </label>
+                  )}
+
+                  <label>
+                    서류 제출상태
+                    <select
+                      value={form.doc_status || '서류 제출전'}
+                      onChange={(e) => setForm({ ...form, doc_status: e.target.value })}
+                    >
+                      {LINKAGE_DOC_STATUSES.map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label style={{ justifyContent: 'flex-end' }}>
+                    완료 여부
+                    <div className="checkbox-inline-box">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(form.completed)}
+                        onChange={(e) => setForm({ ...form, completed: e.target.checked })}
+                      />
+                      <span>완료</span>
+                    </div>
+                  </label>
+
+                  <label className="wide">
+                    특이사항
+                    <textarea
+                      rows="3"
+                      placeholder="특이사항을 입력하세요"
+                      value={form.note || ''}
+                      onChange={(e) => setForm({ ...form, note: e.target.value })}
+                    />
+                  </label>
+                </div>
+              ) : page === 'followups' ? (
+                <div className="form-grid">
+                  <label className="wide" style={{ position: 'relative' }}>
+                    이름
+                    <input
+                      type="text"
+                      required
+                      placeholder="참여자 이름 입력"
+                      value={form.participant_name || ''}
+                      onFocus={() => setShowNameSuggestions(true)}
+                      onBlur={() => setTimeout(() => setShowNameSuggestions(false), 160)}
+                      onChange={(e) => {
+                        setForm({ ...form, participant_name: e.target.value });
+                        setShowNameSuggestions(true);
+                      }}
+                    />
+                    {showNameSuggestions && suggestedParticipants.length > 0 && (
+                      <div className="name-suggestion-dropdown">
+                        {suggestedParticipants.map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className="name-suggestion-item"
+                            onMouseDown={() => {
+                              setForm({
+                                ...form,
+                                participant_name: p.name,
+                                participant_id: p.id,
+                                cohort: p.cohort || form.cohort || '1기'
+                              });
+                              setShowNameSuggestions(false);
+                            }}
+                          >
+                            <b>{p.name}</b>
+                            <small>{p.cohort || '기수 미지정'}</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </label>
+
+                  <label className="wide">
+                    기수
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <select
+                        style={{ flex: 1, minWidth: '140px' }}
+                        value={form.cohort || '1기'}
+                        onChange={(e) => setForm({ ...form, cohort: e.target.value })}
+                      >
+                        {cohortOptions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="새 기수 추가 (예: 5기)"
+                        style={{ width: '150px' }}
+                        value={newCohortInput}
+                        onChange={(e) => setNewCohortInput(e.target.value)}
+                      />
+                      <button type="button" className="secondary" onClick={handleAddNewCohort}>
+                        기수 추가
+                      </button>
+                    </div>
+                  </label>
+
+                  <label className="wide">
+                    특이사항
+                    <textarea
+                      rows="3"
+                      placeholder="특이사항을 입력하세요"
+                      value={form.note || ''}
+                      onChange={(e) => setForm({ ...form, note: e.target.value })}
+                    />
+                  </label>
+                </div>
+              ) : (
+                <div className="form-grid">
+                  {page === 'participants' && (
+                    <>
+                      <label>
+                        이름
+                        <input
+                          required
+                          type="text"
+                          value={form.name || ''}
+                          onChange={(e) => setForm({ ...form, name: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        연락처
+                        <input
+                          type="text"
+                          value={form.phone || ''}
+                          onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        기수
                         <select
-                          value={form[key] || options?.[0] || ''}
-                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                          value={form.cohort || '1기'}
+                          onChange={(e) => setForm({ ...form, cohort: e.target.value })}
                         >
-                          {options.map((o) => (
+                          {cohortOptions.map((o) => (
                             <option key={o} value={o}>
                               {o}
                             </option>
                           ))}
                         </select>
-                      ) : type === 'datetime_range' ? (
+                      </label>
+                      <label>
+                        담당자
+                        <input
+                          type="text"
+                          value={form.manager || ''}
+                          onChange={(e) => setForm({ ...form, manager: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        참여 상태
+                        <select
+                          value={form.status || '참여중'}
+                          onChange={(e) => setForm({ ...form, status: e.target.value })}
+                        >
+                          {['참여중', '수료', '중도탈락', '대기'].map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="wide">
+                        메모
+                        <textarea
+                          rows="3"
+                          value={form.memo || ''}
+                          onChange={(e) => setForm({ ...form, memo: e.target.value })}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {page === 'schedules' && (
+                    <>
+                      <label className="wide">
+                        일정명
+                        <input
+                          required
+                          type="text"
+                          value={form.title || ''}
+                          onChange={(e) => setForm({ ...form, title: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        구분
+                        <select
+                          value={form.category || SCHEDULE_CATEGORIES[0]}
+                          onChange={(e) => setForm({ ...form, category: e.target.value })}
+                        >
+                          {SCHEDULE_CATEGORIES.map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="wide">
+                        시작·종료 일시
                         <div className="datetime-range-box">
                           <label className="time-toggle-row">
                             <input
@@ -1115,7 +1994,25 @@ function App() {
                             )}
                           </div>
                         </div>
-                      ) : type === 'multi_manager' ? (
+                      </label>
+                      <label>
+                        장소
+                        <input
+                          type="text"
+                          value={form.location || ''}
+                          onChange={(e) => setForm({ ...form, location: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        참여 인원(명)
+                        <input
+                          type="number"
+                          value={form.expected_count ?? 0}
+                          onChange={(e) => setForm({ ...form, expected_count: e.target.value })}
+                        />
+                      </label>
+                      <label className="wide">
+                        담당자
                         <div className="manager-selector-box">
                           {rows.managers && rows.managers.length > 0 ? (
                             <div className="manager-role-groups">
@@ -1152,11 +2049,26 @@ function App() {
                             </div>
                           )}
                         </div>
-                      ) : type === 'participant' ? (
+                      </label>
+                      <label className="wide">
+                        내용
+                        <textarea
+                          rows="3"
+                          value={form.description || ''}
+                          onChange={(e) => setForm({ ...form, description: e.target.value })}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {page === 'attendance' && (
+                    <>
+                      <label>
+                        참여자
                         <select
                           required
-                          value={form[key] || ''}
-                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                          value={form.participant_id || ''}
+                          onChange={(e) => setForm({ ...form, participant_id: e.target.value })}
                         >
                           <option value="">참여자 선택</option>
                           {rows.participants.map((p) => (
@@ -1165,24 +2077,76 @@ function App() {
                             </option>
                           ))}
                         </select>
-                      ) : type === 'textarea' ? (
+                      </label>
+                      <label>
+                        일자
+                        <input
+                          type="date"
+                          value={form.attend_date || today}
+                          onChange={(e) => setForm({ ...form, attend_date: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        출결 상태
+                        <select
+                          value={form.status || '출석'}
+                          onChange={(e) => setForm({ ...form, status: e.target.value })}
+                        >
+                          {['출석', '지각', '조퇴', '결석', '공결'].map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        비고
+                        <input
+                          type="text"
+                          value={form.memo || ''}
+                          onChange={(e) => setForm({ ...form, memo: e.target.value })}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {page === 'managers' && (
+                    <>
+                      <label>
+                        담당자명
+                        <input
+                          required
+                          type="text"
+                          value={form.name || ''}
+                          onChange={(e) => setForm({ ...form, name: e.target.value })}
+                        />
+                      </label>
+                      <label>
+                        담당 역할
+                        <select
+                          value={form.role || '매니저'}
+                          onChange={(e) => setForm({ ...form, role: e.target.value })}
+                        >
+                          {MANAGER_ROLES.map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="wide">
+                        비고
                         <textarea
                           rows="3"
-                          value={form[key] || ''}
-                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                          value={form.memo || ''}
+                          onChange={(e) => setForm({ ...form, memo: e.target.value })}
                         />
-                      ) : (
-                        <input
-                          required={['name', 'title', 'participant_id'].includes(key)}
-                          type={type}
-                          value={form[key] ?? ''}
-                          onChange={(e) => setForm({ ...form, [key]: e.target.value })}
-                        />
-                      )}
-                    </label>
-                  );
-                })}
-              </div>
+                      </label>
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className="modal-actions between">
                 <div>
                   {editing && (
@@ -1555,7 +2519,7 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
             <div className="cohort-add-box">
               <input
                 type="text"
-                placeholder="새 기수 (예: 4기)"
+                placeholder="새 기수 (예: 5기)"
                 value={newCohortName}
                 onChange={(e) => setNewCohortName(e.target.value)}
               />
@@ -1984,7 +2948,7 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   <p>{dashConfig.today_section_sub || `${today} 기준 예정 일정`}</p>
                 </div>
                 <button className="text-button" onClick={() => onNavigate('schedules')}>
-                  일정 관리 →
+                  사업단 일정 →
                 </button>
               </div>
               {todaySchedules.length ? (
@@ -1992,7 +2956,7 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   const mgrs = extractScheduleManagers(s);
                   const timeText = formatScheduleTimeRange(s);
                   return (
-                    <div className="dash-item-box is-pinned" key={s.id}>
+                    <div className="today-style-card" key={s.id}>
                       <div className="dash-item-title-row">
                         <span className="pin-badge">오늘</span>
                         <span className="program-tag">[{s.category || '일정'}]</span>
@@ -2045,13 +3009,20 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   const timeText = formatScheduleTimeRange(s);
                   return (
                     <div
-                      className={'week-item-card ' + (isTodayItem ? 'is-pinned' : '')}
+                      className={isTodayItem ? 'today-style-card' : 'week-item-card'}
                       key={s.id}
                     >
-                      <div className="program-badge-box">[{s.category || '프로그램'}]</div>
+                      {!isTodayItem && (
+                        <div className="program-badge-box">[{s.category || '프로그램'}]</div>
+                      )}
                       <div className="week-item-content">
                         <div className="dash-item-title-row">
-                          {isTodayItem && <span className="pin-badge">오늘</span>}
+                          {isTodayItem && (
+                            <>
+                              <span className="pin-badge">오늘</span>
+                              <span className="program-tag">[{s.category || '일정'}]</span>
+                            </>
+                          )}
                           <b className="dash-item-title">{s.title}</b>
                           {Number(s.expected_count) > 0 && (
                             <span className="pill">{s.expected_count}명</span>
@@ -2130,15 +3101,15 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                 </select>
               </div>
               <div className="recruit-list">
-                <div className="recruit-row">
+                <div className="recruit-row recruit-tinted">
                   <span className="course-badge short">{selectedCohort} 단기</span>
                   <b className="recruit-date">{activeRecruit.short || '일정 미등록'}</b>
                 </div>
-                <div className="recruit-row">
+                <div className="recruit-row recruit-tinted">
                   <span className="course-badge mid">{selectedCohort} 중기</span>
                   <b className="recruit-date">{activeRecruit.mid || '일정 미등록'}</b>
                 </div>
-                <div className="recruit-row">
+                <div className="recruit-row recruit-tinted">
                   <span className="course-badge long">{selectedCohort} 장기</span>
                   <b className="recruit-date">{activeRecruit.long || '일정 미등록'}</b>
                 </div>
@@ -2171,6 +3142,23 @@ function Empty({ text }) {
   return <div className="empty">{text}</div>;
 }
 
+function SortableHeader({ label, active, direction, onClick }) {
+  return (
+    <button
+      type="button"
+      className={'sort-th-btn ' + (active ? 'active' : '')}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      {active ? (
+        <span className="sort-dir-mark">{direction === 'asc' ? '↑' : '↓'}</span>
+      ) : (
+        <ArrowUpDown size={13} className="sort-icon-muted" />
+      )}
+    </button>
+  );
+}
+
 function DataTable({
   page,
   rows,
@@ -2178,8 +3166,177 @@ function DataTable({
   onEdit,
   onDelete,
   managerSort,
-  onSortManager
+  onSortManager,
+  linkageSort,
+  onSortLinkage,
+  onToggleLinkageCompleted,
+  onChangeLinkageDocStatus,
+  followupSort,
+  onSortFollowup,
+  onChangeFollowupRound
 }) {
+  if (page === 'consultations') {
+    const cols = [
+      ['name', '이름'],
+      ['cohort', '기수'],
+      ['program', '사후연계 프로그램'],
+      ['doc_status', '서류 제출상태'],
+      ['note', '특이사항'],
+      ['completed', '완료']
+    ];
+
+    return (
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              {cols.map(([key, label]) => (
+                <th key={key}>
+                  <SortableHeader
+                    label={label}
+                    active={linkageSort?.key === key}
+                    direction={linkageSort?.direction}
+                    onClick={() => onSortLinkage?.(key)}
+                  />
+                </th>
+              ))}
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const meta = parseLinkageMeta(r);
+              const displayName = meta.participant_name || participantName(r.participant_id);
+              return (
+                <tr key={r.id}>
+                  <td><b>{displayName}</b></td>
+                  <td>{meta.cohort || '-'}</td>
+                  <td>{meta.program || '-'}</td>
+                  <td>
+                    <select
+                      className="inline-table-select"
+                      value={meta.doc_status}
+                      onChange={(e) => onChangeLinkageDocStatus?.(r, e.target.value)}
+                    >
+                      {LINKAGE_DOC_STATUSES.map((st) => (
+                        <option key={st} value={st}>
+                          {st}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <span className="truncate">{meta.note || '-'}</span>
+                  </td>
+                  <td>
+                    <label className="table-checkbox-wrap">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(meta.completed)}
+                        onChange={() => onToggleLinkageCompleted?.(r)}
+                      />
+                      <span>{meta.completed ? '완료' : '미완료'}</span>
+                    </label>
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button onClick={() => onEdit(r)}>수정</button>
+                      <button className="danger" onClick={() => onDelete(r.id)}>
+                        삭제
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {!rows.length && <Empty text="등록된 사후연계 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />}
+      </div>
+    );
+  }
+
+  if (page === 'followups') {
+    const cols = [
+      ['name', '이름'],
+      ['cohort', '기수'],
+      ['round1', '사후관리 1차'],
+      ['round2', '사후관리 2차'],
+      ['round3', '사후관리 3차'],
+      ['note', '특이사항']
+    ];
+
+    return (
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              {cols.map(([key, label]) => (
+                <th key={key}>
+                  <SortableHeader
+                    label={label}
+                    active={followupSort?.key === key}
+                    direction={followupSort?.direction}
+                    onClick={() => onSortFollowup?.(key)}
+                  />
+                </th>
+              ))}
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const fu = parseFollowupDates(r);
+              const displayName = fu.participant_name || participantName(r.participant_id);
+              return (
+                <tr key={r.id}>
+                  <td><b>{displayName}</b></td>
+                  <td>{fu.cohort || '-'}</td>
+                  <td>
+                    <input
+                      type="date"
+                      className="inline-date-input"
+                      value={fu.round1_date || ''}
+                      onChange={(e) => onChangeFollowupRound?.(r, 'round1_date', e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="date"
+                      className="inline-date-input"
+                      value={fu.round2_date || ''}
+                      onChange={(e) => onChangeFollowupRound?.(r, 'round2_date', e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <input
+                      type="date"
+                      className="inline-date-input"
+                      value={fu.round3_date || ''}
+                      onChange={(e) => onChangeFollowupRound?.(r, 'round3_date', e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <span className="truncate">{fu.note || '-'}</span>
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button onClick={() => onEdit(r)}>수정</button>
+                      <button className="danger" onClick={() => onDelete(r.id)}>
+                        삭제
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {!rows.length && <Empty text="등록된 사후관리 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />}
+      </div>
+    );
+  }
+
   const columns = {
     participants: [
       ['name', '이름'],
@@ -2192,20 +3349,6 @@ function DataTable({
       ['attend_date', '일자'],
       ['participant_id', '참여자'],
       ['status', '출결 상태'],
-      ['memo', '비고']
-    ],
-    consultations: [
-      ['consulted_at', '상담일'],
-      ['participant_id', '참여자'],
-      ['manager', '상담자'],
-      ['category', '상담 구분'],
-      ['content', '상담 내용']
-    ],
-    followups: [
-      ['activity_date', '활동일'],
-      ['participant_id', '참여자'],
-      ['activity_name', '활동명'],
-      ['status', '참여 여부'],
       ['memo', '비고']
     ],
     managers: [
@@ -2222,26 +3365,14 @@ function DataTable({
           <tr>
             {(columns[page] || []).map(([colKey, colLabel]) => {
               if (page === 'managers') {
-                const isSorted = managerSort?.key === colKey;
-                const dirSymbol = isSorted
-                  ? managerSort.direction === 'asc'
-                    ? '↑'
-                    : '↓'
-                  : '';
                 return (
                   <th key={colKey}>
-                    <button
-                      type="button"
-                      className={'sort-th-btn ' + (isSorted ? 'active' : '')}
+                    <SortableHeader
+                      label={colLabel}
+                      active={managerSort?.key === colKey}
+                      direction={managerSort?.direction}
                       onClick={() => onSortManager?.(colKey)}
-                    >
-                      <span>{colLabel}</span>
-                      {isSorted ? (
-                        <span className="sort-dir-mark">{dirSymbol}</span>
-                      ) : (
-                        <ArrowUpDown size={13} className="sort-icon-muted" />
-                      )}
-                    </button>
+                    />
                   </th>
                 );
               }
@@ -2344,7 +3475,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
       <div className="page-heading">
         <div>
           <p className="eyebrow">SCHEDULE CALENDAR</p>
-          <h1>일정 관리</h1>
+          <h1>사업단 일정</h1>
           <p className="muted">
             날짜 칸을 클릭해 바로 일정을 추가하거나, 일정을 클릭해 상세 확인·수정·삭제할 수 있습니다.
           </p>
@@ -2476,14 +3607,18 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
                           </span>
                           {timeLabel && <span className="cal-ev-time">{timeLabel}</span>}
                         </div>
+
                         <div className="cal-ev-title">{s.title}</div>
-                        <div className="cal-ev-meta">
-                          {s.location && <span>📍 {s.location}</span>}
-                          {Number(s.expected_count) > 0 && (
-                            <span>👥 {s.expected_count}명</span>
-                          )}
-                          {mgrs.length > 0 && <span>🙋 {mgrs.join(', ')}</span>}
+
+                        <div className="cal-ev-line-loc-count">
+                          <span>📍 {s.location || '-'}</span>
+                          <span>👥 {Number(s.expected_count) > 0 ? `${s.expected_count}명` : '-'}</span>
                         </div>
+
+                        <div className="cal-ev-line-managers">
+                          🙋 {mgrs.length > 0 ? mgrs.join(', ') : '-'}
+                        </div>
+
                         {s.description && (
                           <div className="cal-ev-desc">{s.description}</div>
                         )}
@@ -2562,10 +3697,10 @@ function Stats({ rows }) {
             </div>
           </div>
           {[
-            ['일정', rows.schedules.length],
+            ['사업단 일정', rows.schedules.length],
             ['출결 기록', rows.attendance.length],
-            ['상담 기록', rows.consultations.length],
-            ['사후관리 활동', rows.followups.length],
+            ['사후연계', rows.consultations.length],
+            ['사후관리', rows.followups.length],
             ['등록 담당자', rows.managers.length]
           ].map(([l, n]) => (
             <div className="summary-line" key={l}>

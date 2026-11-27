@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { LogIn, UserPlus, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-// 한글 이름(아이디)을 Supabase Auth용 고유 이메일 형식으로 안전하게 변환
 export const nameToAuthEmail = (rawName) => {
   const clean = String(rawName || '').trim().replace(/\s+/g, '');
   const encoded = Array.from(clean)
@@ -11,7 +10,7 @@ export const nameToAuthEmail = (rawName) => {
 };
 
 export default function AuthScreen({ supabase, brandTitle = '청도지 WORKSPACE' }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+  const [mode, setMode] = useState('login');
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -80,10 +79,8 @@ export default function AuthScreen({ supabase, brandTitle = '청도지 WORKSPACE
             setError(signUpError.message);
           }
         } else if (data?.session) {
-          // Confirm email이 꺼져 있으면 가입과 동시에 자동 로그인됨
           setNotice(`${trimmedName}님, 회원가입이 완료되었습니다.`);
         } else {
-          // Confirm email이 켜져 있는 경우 안내
           setNotice('계정이 생성되었습니다. 로그인 버튼을 눌러 접속해 주세요.');
           setMode('login');
           setPassword('');
