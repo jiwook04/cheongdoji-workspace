@@ -25,8 +25,10 @@ import {
   ArrowUp,
   ArrowDown,
   Trash2,
-  ArrowUpDown
+  ArrowUpDown,
+  LogOut
 } from 'lucide-react';
+import AuthScreen from './AuthScreen';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anon = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -393,6 +395,33 @@ const extractScheduleManagers = (schedule) => {
 
 function App() {
   const [page, setPage] = useState('dashboard');
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data?.session || null);
+      setAuthReady(true);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
+
+    return () => {
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+  };
+
   const [rows, setRows] = useState({
     participants: [],
     schedules: [],
@@ -770,6 +799,13 @@ function App() {
   }, [rows, page, query, managerSort]);
 
   if (!supabase) return <SetupScreen />;
+  if (!authReady) return null;
+  if (!session) {
+    return <AuthScreen supabase={supabase} brandTitle={siteConfig.brand_title} />;
+  }
+
+  const currentUserName = session.user?.user_metadata?.full_name || '담당자';
+  const currentUserRole = session.user?.user_metadata?.role || '매니저';
 
   const rawNavItem = nav.find((n) => n[0] === page);
   const pageTitle = rawNavItem ? getMenuLabel(rawNavItem[0], rawNavItem[1]) : '대시보드';
@@ -824,11 +860,20 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="user-chip">
-            <div className="avatar">청</div>
+            <div className="avatar">{currentUserName.slice(0, 1)}</div>
             <div className="user-info">
-              <b>공용 워크스페이스</b>
-              <small>바로 접속 모드</small>
+              <b>{currentUserName}</b>
+              <small>{currentUserRole}</small>
             </div>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={handleLogout}
+              title="로그아웃"
+              style={{ marginLeft: 'auto' }}
+            >
+              <LogOut size={16} />
+            </button>
           </div>
           <div className="version">CHEONGDOJI · 2026</div>
         </div>
@@ -849,7 +894,7 @@ function App() {
             <button className="icon-btn" onClick={load} title="새로고침">
               <RefreshCw size={17} />
             </button>
-            <div className="avatar">청</div>
+            <div className="avatar">{currentUserName.slice(0, 1)}</div>
           </div>
         </header>
 
@@ -2266,13 +2311,12 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
       .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
   };
 
-  // 토·일을 제외한 평일(월, 화, 수, 목, 금) 5열 달력 구성
   const weekdays = ['월', '화', '수', '목', '금'];
   const firstWeekdayIndex = useMemo(() => {
     for (let d = 1; d <= days; d += 1) {
       const dow = new Date(year, m, d).getDay();
       if (dow >= 1 && dow <= 5) {
-        return dow - 1; // 0: 월, 1: 화, 2: 수, 3: 목, 4: 금
+        return dow - 1;
       }
     }
     return 0;
