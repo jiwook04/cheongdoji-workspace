@@ -1239,26 +1239,15 @@ function App() {
 
     try {
       if (isBinaryExcel) {
-        const xlsxMod = await import(/* @vite-ignore */ 'xlsx').catch(() => null);
-        if (!xlsxMod) {
-          setError(
-            '.xlsx/.xls 파일을 직접 읽으려면 xlsx 패키지가 필요합니다. 엑셀에서 표를 복사해 붙여넣거나 CSV 파일로 저장 후 업로드해 주세요.'
-          );
-          e.target.value = '';
-          return;
-        }
-        const XLSX = xlsxMod.default || xlsxMod;
-        const buf = await file.arrayBuffer();
-        const wb = XLSX.read(buf, { type: 'array', cellDates: true });
-        const firstSheet = wb.Sheets[wb.SheetNames[0]];
-        const matrix = XLSX.utils.sheet_to_json(firstSheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' });
-        const normalized = normalizeRowsFromCells(matrix);
-        setBulkPreviewRows(normalized);
-        setBulkText(normalized.map((r) => r.join('\t')).join('\n'));
-      } else {
-        const text = await file.text();
-        syncBulkTextAndPreview(text);
+        setError(
+          '.xlsx/.xls 파일 직접 업로드는 현재 미지원입니다. 엑셀 시트에서 행을 드래그해 복사(Ctrl+C) 후 붙여넣기 하거나, CSV(.csv) 파일로 저장해 업로드해 주세요.'
+        );
+        e.target.value = '';
+        return;
       }
+
+      const text = await file.text();
+      syncBulkTextAndPreview(text);
     } catch (err) {
       setError(`파일을 읽는 중 오류가 발생했습니다: ${err?.message || '알 수 없는 오류'}`);
     } finally {
@@ -1847,7 +1836,7 @@ function App() {
                     <input
                       ref={excelFileInputRef}
                       type="file"
-                      accept=".xlsx,.xls,.csv,.tsv,.txt"
+                      accept=".csv,.tsv,.txt"
                       style={{ display: 'none' }}
                       onChange={handleExcelFileUpload}
                     />
