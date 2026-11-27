@@ -3527,7 +3527,10 @@ function DataTable({
           <thead>
             <tr>
               {cols.map(([key, label]) => (
-                <th key={key}>
+                <th
+                  key={key}
+                  className={key === 'completed' ? 'complete-col-th' : ''}
+                >
                   <SortableHeader
                     label={label}
                     active={linkageSort?.key === key}
@@ -3542,14 +3545,13 @@ function DataTable({
             {rows.map((r) => {
               const meta = parseLinkageMeta(r);
               const displayName = meta.participant_name || participantName(r.participant_id);
-              const progStyle = getProgramStyle(meta.program);
               return (
                 <tr key={r.id}>
                   <td><b>{displayName}</b></td>
                   <td>
                     <CohortPill cohort={meta.cohort} />
                   </td>
-                  <td style={{ backgroundColor: progStyle.bg }}>
+                  <td>
                     <ProgramPill program={meta.program} />
                   </td>
                   <td>
@@ -3587,6 +3589,94 @@ function DataTable({
         </table>
         {!rows.length && (
           <Empty text="등록된 사후연계 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />
+        )}
+      </div>
+    );
+  }
+
+  if (page === 'followups') {
+    const cols = [
+      ['name', '이름'],
+      ['cohort', '기수'],
+      ['program', '사후연계 프로그램'],
+      ['round1', '사후관리 1차'],
+      ['round2', '사후관리 2차'],
+      ['round3', '사후관리 3차'],
+      ['note', '특이사항']
+    ];
+
+    return (
+      <div className="table-wrap grid-lined-wrap">
+        <table className="grid-lined-table followup-table">
+          <thead>
+            <tr>
+              {cols.map(([key, label]) => (
+                <th
+                  key={key}
+                  className={
+                    key === 'round1' || key === 'round2' || key === 'round3'
+                      ? 'followup-round-th'
+                      : ''
+                  }
+                >
+                  <SortableHeader
+                    label={label}
+                    active={followupSort?.key === key}
+                    direction={followupSort?.direction}
+                    onClick={() => onSortFollowup?.(key)}
+                  />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const fu = parseFollowupDates(r);
+              const displayName = fu.participant_name || participantName(r.participant_id);
+              const progName = getLinkedProgram ? getLinkedProgram(displayName, fu.program) : fu.program;
+              return (
+                <tr key={r.id}>
+                  <td><b>{displayName}</b></td>
+                  <td>
+                    <CohortPill cohort={fu.cohort} />
+                  </td>
+                  <td>
+                    <ProgramPill program={progName} />
+                  </td>
+                  <td className="followup-round-td">
+                    <input
+                      type="date"
+                      className="inline-date-input followup-round-input"
+                      value={fu.round1_date || ''}
+                      onChange={(e) => onChangeFollowupRound?.(r, 'round1_date', e.target.value)}
+                    />
+                  </td>
+                  <td className="followup-round-td">
+                    <input
+                      type="date"
+                      className="inline-date-input followup-round-input"
+                      value={fu.round2_date || ''}
+                      onChange={(e) => onChangeFollowupRound?.(r, 'round2_date', e.target.value)}
+                    />
+                  </td>
+                  <td className="followup-round-td">
+                    <input
+                      type="date"
+                      className="inline-date-input followup-round-input"
+                      value={fu.round3_date || ''}
+                      onChange={(e) => onChangeFollowupRound?.(r, 'round3_date', e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <span className="truncate">{fu.note || '-'}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {!rows.length && (
+          <Empty text="등록된 사후관리 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />
         )}
       </div>
     );
