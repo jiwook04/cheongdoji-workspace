@@ -1591,3 +1591,125 @@
   color: #334155;
   cursor: pointer;
 }
+/* 사후연계 · 사후관리 세로선, 기수/프로그램 색상 구분, 확대 UI 및 관리 모달 */
+.grid-lined-table th,
+.grid-lined-table td {
+  border-right: 1px solid #cbd5e1;
+}
+
+.grid-lined-table th:last-child,
+.grid-lined-table td:last-child {
+  border-right: none;
+}
+
+.type-color-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.doc-status-select {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  padding: 7px 11px !important;
+  border-radius: 9px !important;
+  min-width: 142px;
+}
+
+.doc-status-select.done {
+  background-color: #dcfce7 !important;
+  color: #166534 !important;
+  border-color: #86efac !important;
+}
+
+.doc-status-select.pending {
+  background-color: #fef3c7 !important;
+  color: #92400e !important;
+  border-color: #fcd34d !important;
+}
+
+.pure-complete-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: #29485b;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.followup-table th.followup-round-th,
+.followup-table td.followup-round-td {
+  min-width: 176px;
+}
+
+.inline-date-input.followup-round-input {
+  width: 100%;
+  min-width: 154px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 9px;
+}
+
+.modal.modal-wide {
+  width: min(740px, 100%);
+}
+
+.manage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.bulk-del-btn {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bulk-del-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.manage-list-wrap {
+  max-height: 52vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manage-row-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.manage-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}

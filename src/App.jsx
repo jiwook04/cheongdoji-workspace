@@ -27,7 +27,9 @@ import {
   Trash2,
   ArrowUpDown,
   LogOut,
-  FileSpreadsheet
+  FileSpreadsheet,
+  SlidersHorizontal,
+  Pencil
 } from 'lucide-react';
 import AuthScreen from './AuthScreen';
 
@@ -62,6 +64,42 @@ const LINKAGE_PROGRAM_PRESETS = [
 ];
 
 const LINKAGE_DOC_STATUSES = ['서류 제출전', '서류 제출완료'];
+
+const COHORT_PALETTE = [
+  { bg: '#eef2ff', text: '#3730a3', border: '#c7d2fe' },
+  { bg: '#ecfdf5', text: '#065f46', border: '#a7f3d0' },
+  { bg: '#fff7ed', text: '#9a3412', border: '#fed7aa' },
+  { bg: '#fdf2f8', text: '#9d174d', border: '#fbcfe8' },
+  { bg: '#f0f9ff', text: '#075985', border: '#bae6fd' }
+];
+
+const PROGRAM_PALETTE = {
+  '국민취업지원제도': { bg: '#dbeafe', text: '#1e40af', border: '#93c5fd' },
+  '미래내일 일경험': { bg: '#d1fae5', text: '#065f46', border: '#6ee7b7' },
+  '직업훈련': { bg: '#fef3c7', text: '#92400e', border: '#fcd34d' },
+  '구직자 도약 패키지': { bg: '#ede9fe', text: '#5b21b6', border: '#c4b5fd' }
+};
+
+const getCohortStyle = (cohort) => {
+  const str = String(cohort || '').trim();
+  if (!str) return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return COHORT_PALETTE[hash % COHORT_PALETTE.length];
+};
+
+const getProgramStyle = (program) => {
+  const key = String(program || '').trim();
+  if (PROGRAM_PALETTE[key]) return PROGRAM_PALETTE[key];
+  if (!key) return { bg: '#f1f5f9', text: '#475569', border: '#cbd5e1' };
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = (hash * 37 + key.charCodeAt(i)) >>> 0;
+  }
+  return COHORT_PALETTE[hash % COHORT_PALETTE.length];
+};
 
 const CATEGORY_STYLES = {
   '프로그램': {
@@ -132,6 +170,19 @@ const hasExplicitTime = (rawStr) => {
 const pad2 = (n) => String(n).padStart(2, '0');
 const formatLocalDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const today = formatLocalDate(new Date());
+
+const normalizeDateInput = (val) => {
+  if (!val) return '';
+  if (val instanceof Date && !Number.isNaN(val.getTime())) {
+    return formatLocalDate(val);
+  }
+  const s = String(val).trim().replace(/\./g, '-').replace(/\//g, '-');
+  const match = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (match) {
+    return `${match[1]}-${pad2(Number(match[2]))}-${pad2(Number(match[3]))}`;
+  }
+  return '';
+};
 
 const parseRangeFromSchedule = (record) => {
   const fallbackDate = today;
@@ -339,18 +390,36 @@ const parseFollowupDates = (record) => {
   return {
     participant_name: record?.participant_name || parsed.participant_name || '',
     cohort: record?.cohort || parsed.cohort || '1기',
-    round1_date: parsed.round1_date || '',
-    round2_date: parsed.round2_date || '',
-    round3_date: parsed.round3_date || '',
+    program: parsed.program || '',
+    round1_date: normalizeDateInput(parsed.round1_date || ''),
+    round2_date: normalizeDateInput(parsed.round2_date || ''),
+    round3_date: normalizeDateInput(parsed.round3_date || ''),
     note: parsed.note !== undefined ? String(parsed.note) : String(record?.activity_name || '')
   };
 };
 
+const normalizeRowsFromCells = (cellsMatrix) => {
+  const rowsClean = (cellsMatrix || [])
+    .map((r) => (Array.isArray(r) ? r.map((c) => (c == null ? '' : String(c).trim())) : []))
+    .filter((r) => r.some((c) => c !== ''));
+
+  if (!rowsClean.length) return [];
+
+  const firstCells = rowsClean[0].map((c) => c.replace(/\s+/g, ''));
+  const hasHeader =
+    firstCells.includes('이름') ||
+    firstCells.includes('성명') ||
+    firstCells.includes('참여자') ||
+    firstCells.toLowerCase().includes('name');
+
+  return hasHeader ? rowsClean.slice(1) : rowsClean;
+};
+
 const parseSpreadsheetText = (rawText) => {
   const lines = String(rawText || '')
+    .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
+    .filter((l) => l.trim() !== '');
   if (!lines.length) return [];
 
   const delimiter = lines[0].includes('\t') ? '\t' : ',';
@@ -378,14 +447,7 @@ const parseSpreadsheetText = (rawText) => {
     return out;
   };
 
-  const rowsParsed = lines.map(splitRow);
-  const firstCells = rowsParsed[0].map((c) => c.replace(/\s+/g, ''));
-  const hasHeader =
-    firstCells.includes('이름') ||
-    firstCells.includes('성명') ||
-    firstCells.toLowerCase().includes('name');
-
-  return hasHeader ? rowsParsed.slice(1) : rowsParsed;
+  return normalizeRowsFromCells(lines.map(splitRow));
 };
 
 const emptyForms = {
@@ -420,6 +482,7 @@ const emptyForms = {
     participant_id: '',
     participant_name: '',
     cohort: '1기',
+    program: '',
     round1_date: '',
     round2_date: '',
     round3_date: '',
@@ -506,6 +569,8 @@ function App() {
     };
   }, []);
 
+  const currentUserId = session?.user?.id || null;
+
   const handleLogout = async () => {
     if (!supabase) return;
     await supabase.auth.signOut();
@@ -527,7 +592,10 @@ function App() {
   const [modal, setModal] = useState(false);
   const [bulkModal, setBulkModal] = useState(false);
   const [bulkText, setBulkText] = useState('');
+  const [bulkPreviewRows, setBulkPreviewRows] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [manageModal, setManageModal] = useState(false);
+  const [selectedManageIds, setSelectedManageIds] = useState([]);
   const excelFileInputRef = useRef(null);
 
   const [form, setForm] = useState({});
@@ -537,8 +605,6 @@ function App() {
   const [managerSort, setManagerSort] = useState({ key: 'name', direction: 'asc' });
   const [linkageSort, setLinkageSort] = useState({ key: 'name', direction: 'asc' });
   const [followupSort, setFollowupSort] = useState({ key: 'name', direction: 'asc' });
-  const [extraCohorts, setExtraCohorts] = useState([]);
-  const [newCohortInput, setNewCohortInput] = useState('');
   const [showNameSuggestions, setShowNameSuggestions] = useState(false);
 
   const cohortOptions = useMemo(() => {
@@ -549,11 +615,8 @@ function App() {
     Object.keys(siteConfig?.dashboard_config?.recruit_cohorts || {}).forEach((ck) => {
       if (ck) set.add(String(ck).trim());
     });
-    extraCohorts.forEach((c) => {
-      if (c) set.add(String(c).trim());
-    });
     return Array.from(set);
-  }, [rows.participants, siteConfig?.dashboard_config?.recruit_cohorts, extraCohorts]);
+  }, [rows.participants, siteConfig?.dashboard_config?.recruit_cohorts]);
 
   const loadSettings = async () => {
     if (!supabase) return;
@@ -577,7 +640,7 @@ function App() {
     }
   };
 
-  const load = async () => {
+  const load = async (uid = currentUserId) => {
     if (!supabase) return;
     setLoading(true);
     setError('');
@@ -597,7 +660,11 @@ function App() {
             : n === 'consultations'
             ? 'consulted_at'
             : 'activity_date';
-        return supabase.from(n).select('*').order(orderCol, { ascending: false }).limit(500);
+        let q = supabase.from(n).select('*').order(orderCol, { ascending: false }).limit(500);
+        if ((n === 'consultations' || n === 'followups') && uid) {
+          q = q.eq('user_id', uid);
+        }
+        return q;
       })
     );
 
@@ -632,19 +699,20 @@ function App() {
   };
 
   useEffect(() => {
-    load();
-  }, []);
+    if (!authReady) return;
+    load(currentUserId);
+  }, [authReady, currentUserId]);
 
   useEffect(() => {
     if (!supabase) return;
     const ch = supabase
       .channel('workspace-live')
-      .on('postgres_changes', { event: '*', schema: 'public' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public' }, () => load(currentUserId))
       .subscribe();
     return () => {
       supabase.removeChannel(ch);
     };
-  }, []);
+  }, [currentUserId]);
 
   const saveSettings = async (nextConfig) => {
     if (!supabase) return;
@@ -708,11 +776,21 @@ function App() {
     return '참여자 정보 없음';
   };
 
+  const getLinkedProgramForParticipant = (participantName, fallbackProg = '') => {
+    if (fallbackProg) return fallbackProg;
+    const cleanName = String(participantName || '').trim();
+    if (!cleanName) return '';
+    const match = (rows.consultations || []).find((c) => {
+      const m = parseLinkageMeta(c);
+      return String(m.participant_name || '').trim() === cleanName;
+    });
+    return match ? parseLinkageMeta(match).program : '';
+  };
+
   const openNew = () => {
     const targetTable = tableByPage[page] || 'schedules';
     setEditing(null);
     setShowNameSuggestions(false);
-    setNewCohortInput('');
 
     if (targetTable === 'schedules') {
       setForm({
@@ -744,6 +822,7 @@ function App() {
       setForm({
         ...emptyForms.followups,
         cohort: '1기',
+        program: '',
         round1_date: '',
         round2_date: '',
         round3_date: '',
@@ -772,11 +851,11 @@ function App() {
     setModal(true);
   };
 
-  const openEdit = (r) => {
-    const targetTable = tableByPage[page] || 'schedules';
+  const openEdit = (r, explicitPage = null) => {
+    const activePage = explicitPage || page;
+    const targetTable = tableByPage[activePage] || 'schedules';
     setEditing(r.id);
     setShowNameSuggestions(false);
-    setNewCohortInput('');
 
     if (targetTable === 'schedules') {
       const range = parseRangeFromSchedule(r);
@@ -820,6 +899,7 @@ function App() {
         ...r,
         participant_name: fu.participant_name || resolveParticipantName(r),
         cohort: fu.cohort || '1기',
+        program: fu.program || '',
         round1_date: fu.round1_date,
         round2_date: fu.round2_date,
         round3_date: fu.round3_date,
@@ -831,7 +911,7 @@ function App() {
     setModal(true);
   };
 
-  const buildLinkagePayload = (srcForm, actorName) => {
+  const buildLinkagePayload = (srcForm, actorName, ownerId = currentUserId) => {
     const chosenProgram =
       srcForm.program === '직접 입력'
         ? String(srcForm.customProgram || '').trim() || '기타'
@@ -859,7 +939,7 @@ function App() {
       note
     });
 
-    return {
+    const base = {
       participant_id: matchedParticipant?.id || srcForm.participant_id || null,
       consulted_at: srcForm.consulted_at || today,
       manager: srcForm.manager || actorName || '담당자',
@@ -867,14 +947,20 @@ function App() {
       content: note,
       next_action: metaJson
     };
+
+    if (ownerId) {
+      base.user_id = srcForm.user_id || ownerId;
+    }
+    return base;
   };
 
-  const buildFollowupPayload = (srcForm, actorName) => {
+  const buildFollowupPayload = (srcForm, actorName, ownerId = currentUserId) => {
     const participantName = String(srcForm.participant_name || '').trim();
     const cohort = String(srcForm.cohort || '1기').trim();
-    const round1_date = srcForm.round1_date || '';
-    const round2_date = srcForm.round2_date || '';
-    const round3_date = srcForm.round3_date || '';
+    const program = String(srcForm.program || '').trim();
+    const round1_date = normalizeDateInput(srcForm.round1_date || '');
+    const round2_date = normalizeDateInput(srcForm.round2_date || '');
+    const round3_date = normalizeDateInput(srcForm.round3_date || '');
     const note = String(srcForm.note || '').trim();
 
     const matchedParticipant = rows.participants.find(
@@ -884,6 +970,7 @@ function App() {
     const memoJson = JSON.stringify({
       participant_name: participantName,
       cohort,
+      program,
       round1_date,
       round2_date,
       round3_date,
@@ -892,19 +979,29 @@ function App() {
 
     const latestDate = round3_date || round2_date || round1_date || srcForm.activity_date || today;
 
-    return {
+    const base = {
       participant_id: matchedParticipant?.id || srcForm.participant_id || null,
       activity_date: latestDate,
       activity_name: note || '사후관리',
       status: actorName || '참여',
       memo: memoJson
     };
+
+    if (ownerId) {
+      base.user_id = srcForm.user_id || ownerId;
+    }
+    return base;
   };
 
   const save = async (e) => {
     e.preventDefault();
     const table = tableByPage[page];
     if (!table || !supabase) return;
+
+    if ((table === 'consultations' || table === 'followups') && !currentUserId) {
+      setError('로그인 정보가 확인되지 않아 개인 데이터를 저장할 수 없습니다.');
+      return;
+    }
 
     const actorName = session?.user?.user_metadata?.full_name || '담당자';
     let payload = { ...form };
@@ -953,13 +1050,17 @@ function App() {
       payload.role = MANAGER_ROLES.includes(payload.role) ? payload.role : '매니저';
       delete payload.phone;
     } else if (table === 'consultations') {
-      payload = buildLinkagePayload(form, actorName);
+      payload = buildLinkagePayload(form, actorName, currentUserId);
     } else if (table === 'followups') {
-      payload = buildFollowupPayload(form, actorName);
+      payload = buildFollowupPayload(form, actorName, currentUserId);
     }
 
     if (editing) {
-      const { error: upError } = await supabase.from(table).update(payload).eq('id', editing);
+      let upQuery = supabase.from(table).update(payload).eq('id', editing);
+      if ((table === 'consultations' || table === 'followups') && currentUserId) {
+        upQuery = upQuery.eq('user_id', currentUserId);
+      }
+      const { error: upError } = await upQuery;
       if (upError) {
         setError(upError.message);
         return;
@@ -972,7 +1073,7 @@ function App() {
       }
     }
     setModal(false);
-    await load();
+    await load(currentUserId);
   };
 
   const updateLinkageRowInline = async (row, patchMeta) => {
@@ -984,15 +1085,14 @@ function App() {
       content: nextMeta.note,
       next_action: JSON.stringify(nextMeta)
     };
-    const { error: upErr } = await supabase
-      .from('consultations')
-      .update(updatedPayload)
-      .eq('id', row.id);
+    let q = supabase.from('consultations').update(updatedPayload).eq('id', row.id);
+    if (currentUserId) q = q.eq('user_id', currentUserId);
+    const { error: upErr } = await q;
     if (upErr) {
       setError(upErr.message);
       return;
     }
-    await load();
+    await load(currentUserId);
   };
 
   const updateFollowupRoundInline = async (row, patchMeta) => {
@@ -1006,21 +1106,30 @@ function App() {
       activity_name: nextMeta.note || '사후관리',
       memo: JSON.stringify(nextMeta)
     };
-    const { error: upErr } = await supabase
-      .from('followups')
-      .update(updatedPayload)
-      .eq('id', row.id);
+    let q = supabase.from('followups').update(updatedPayload).eq('id', row.id);
+    if (currentUserId) q = q.eq('user_id', currentUserId);
+    const { error: upErr } = await q;
     if (upErr) {
       setError(upErr.message);
       return;
     }
-    await load();
+    await load(currentUserId);
+  };
+
+  const syncBulkTextAndPreview = (textVal) => {
+    setBulkText(textVal);
+    setBulkPreviewRows(parseSpreadsheetText(textVal));
   };
 
   const handleBulkImportSubmit = async (e) => {
     e.preventDefault();
     if (!supabase) return;
-    const rowsToImport = parseSpreadsheetText(bulkText);
+    if ((page === 'consultations' || page === 'followups') && !currentUserId) {
+      setError('로그인 정보가 확인되지 않아 일괄 등록할 수 없습니다.');
+      return;
+    }
+
+    const rowsToImport = bulkPreviewRows.length ? bulkPreviewRows : parseSpreadsheetText(bulkText);
     if (!rowsToImport.length) {
       setError('등록할 행 데이터를 입력하거나 파일을 선택해 주세요.');
       return;
@@ -1034,12 +1143,18 @@ function App() {
       if (page === 'consultations') {
         const insertList = rowsToImport
           .map((cells) => {
-            const nameVal = (cells[0] || '').trim();
+            const nameVal = String(cells[0] || '').trim();
             if (!nameVal) return null;
-            const cohortVal = (cells[1] || '1기').trim();
-            const programVal = (cells[2] || LINKAGE_PROGRAM_PRESETS[0]).trim();
-            const docVal = LINKAGE_DOC_STATUSES.includes(cells[3]) ? cells[3] : '서류 제출전';
-            const noteVal = (cells[4] || '').trim();
+            const cohortVal = String(cells[1] || '1기').trim() || '1기';
+            const programVal = String(cells[2] || LINKAGE_PROGRAM_PRESETS[0]).trim() || LINKAGE_PROGRAM_PRESETS[0];
+            const rawDoc = String(cells[3] || '').trim();
+            const docVal =
+              LINKAGE_DOC_STATUSES.includes(rawDoc)
+                ? rawDoc
+                : /완료/.test(rawDoc)
+                ? '서류 제출완료'
+                : '서류 제출전';
+            const noteVal = String(cells[4] || '').trim();
             const completedVal = /^(y|yes|true|1|완료|o)$/i.test(String(cells[5] || '').trim());
 
             return buildLinkagePayload(
@@ -1052,7 +1167,8 @@ function App() {
                 completed: completedVal,
                 note: noteVal
               },
-              actorName
+              actorName,
+              currentUserId
             );
           })
           .filter(Boolean);
@@ -1069,24 +1185,27 @@ function App() {
       } else if (page === 'followups') {
         const insertList = rowsToImport
           .map((cells) => {
-            const nameVal = (cells[0] || '').trim();
+            const nameVal = String(cells[0] || '').trim();
             if (!nameVal) return null;
-            const cohortVal = (cells[1] || '1기').trim();
-            const r1 = (cells[2] || '').trim();
-            const r2 = (cells[3] || '').trim();
-            const r3 = (cells[4] || '').trim();
-            const noteVal = (cells[5] || '').trim();
+            const cohortVal = String(cells[1] || '1기').trim() || '1기';
+            const r1 = normalizeDateInput(cells[2] || '');
+            const r2 = normalizeDateInput(cells[3] || '');
+            const r3 = normalizeDateInput(cells[4] || '');
+            const noteVal = String(cells[5] || '').trim();
+            const programVal = String(cells[6] || '').trim();
 
             return buildFollowupPayload(
               {
                 participant_name: nameVal,
                 cohort: cohortVal,
+                program: programVal,
                 round1_date: r1,
                 round2_date: r2,
                 round3_date: r3,
                 note: noteVal
               },
-              actorName
+              actorName,
+              currentUserId
             );
           })
           .filter(Boolean);
@@ -1104,29 +1223,47 @@ function App() {
 
       setBulkModal(false);
       setBulkText('');
-      await load();
+      setBulkPreviewRows([]);
+      await load(currentUserId);
     } finally {
       setBulkBusy(false);
     }
   };
 
-  const handleExcelFileUpload = (e) => {
+  const handleExcelFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      setBulkText(String(reader.result || ''));
-    };
-    reader.readAsText(file, 'utf-8');
-    e.target.value = '';
-  };
+    setError('');
+    const lowerName = String(file.name || '').toLowerCase();
+    const isBinaryExcel = lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls');
 
-  const handleAddNewCohort = () => {
-    const trimmed = newCohortInput.trim();
-    if (!trimmed) return;
-    setExtraCohorts((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]));
-    setForm((prev) => ({ ...prev, cohort: trimmed }));
-    setNewCohortInput('');
+    try {
+      if (isBinaryExcel) {
+        const xlsxMod = await import(/* @vite-ignore */ 'xlsx').catch(() => null);
+        if (!xlsxMod) {
+          setError(
+            '.xlsx/.xls 파일을 직접 읽으려면 xlsx 패키지가 필요합니다. 엑셀에서 표를 복사해 붙여넣거나 CSV 파일로 저장 후 업로드해 주세요.'
+          );
+          e.target.value = '';
+          return;
+        }
+        const XLSX = xlsxMod.default || xlsxMod;
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+        const firstSheet = wb.Sheets[wb.SheetNames[0]];
+        const matrix = XLSX.utils.sheet_to_json(firstSheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' });
+        const normalized = normalizeRowsFromCells(matrix);
+        setBulkPreviewRows(normalized);
+        setBulkText(normalized.map((r) => r.join('\t')).join('\n'));
+      } else {
+        const text = await file.text();
+        syncBulkTextAndPreview(text);
+      }
+    } catch (err) {
+      setError(`파일을 읽는 중 오류가 발생했습니다: ${err?.message || '알 수 없는 오류'}`);
+    } finally {
+      e.target.value = '';
+    }
   };
 
   const remove = async (id) => {
@@ -1134,13 +1271,49 @@ function App() {
     const table = tableByPage[page];
     if (!table) return;
     if (!confirm('이 항목을 삭제할까요?')) return;
-    const { error: delError } = await supabase.from(table).delete().eq('id', id);
+    let delQuery = supabase.from(table).delete().eq('id', id);
+    if ((table === 'consultations' || table === 'followups') && currentUserId) {
+      delQuery = delQuery.eq('user_id', currentUserId);
+    }
+    const { error: delError } = await delQuery;
     if (delError) {
       setError(delError.message);
       return;
     }
     setModal(false);
-    await load();
+    setSelectedManageIds((prev) => prev.filter((itemId) => itemId !== id));
+    await load(currentUserId);
+  };
+
+  const handleBulkDeleteSelected = async () => {
+    if (!supabase || !selectedManageIds.length) return;
+    const table = tableByPage[page];
+    if (!table) return;
+    if (!confirm(`선택한 ${selectedManageIds.length}건을 일괄 삭제할까요?`)) return;
+
+    let delQuery = supabase.from(table).delete().in('id', selectedManageIds);
+    if ((table === 'consultations' || table === 'followups') && currentUserId) {
+      delQuery = delQuery.eq('user_id', currentUserId);
+    }
+    const { error: delErr } = await delQuery;
+    if (delErr) {
+      setError(delErr.message);
+      return;
+    }
+    setSelectedManageIds([]);
+    await load(currentUserId);
+  };
+
+  const toggleSelectManageRow = (id) => {
+    setSelectedManageIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllManageRows = (allRows) => {
+    const allIds = allRows.map((r) => r.id).filter(Boolean);
+    const allSelected = allIds.length > 0 && allIds.every((id) => selectedManageIds.includes(id));
+    setSelectedManageIds(allSelected ? [] : allIds);
   };
 
   const toggleFormManager = (managerName) => {
@@ -1229,12 +1402,17 @@ function App() {
       : data.filter((r) => {
           const meta = parseLinkageMeta(r);
           const fu = parseFollowupDates(r);
+          const fuProg = getLinkedProgramForParticipant(
+            fu.participant_name || participantName(r.participant_id),
+            fu.program
+          );
           return (
             JSON.stringify(r).toLowerCase().includes(query.toLowerCase()) ||
             participantName(r.participant_id).includes(query) ||
             meta.participant_name.includes(query) ||
             meta.program.includes(query) ||
-            fu.participant_name.includes(query)
+            fu.participant_name.includes(query) ||
+            fuProg.includes(query)
           );
         });
 
@@ -1271,8 +1449,10 @@ function App() {
       const factor = direction === 'asc' ? 1 : -1;
       const getVal = (item) => {
         const f = parseFollowupDates(item);
-        if (key === 'name') return f.participant_name || participantName(item.participant_id);
+        const nameVal = f.participant_name || participantName(item.participant_id);
+        if (key === 'name') return nameVal;
         if (key === 'cohort') return f.cohort;
+        if (key === 'program') return getLinkedProgramForParticipant(nameVal, f.program);
         if (key === 'round1') return f.round1_date;
         if (key === 'round2') return f.round2_date;
         if (key === 'round3') return f.round3_date;
@@ -1316,6 +1496,7 @@ function App() {
   };
 
   const supportsBulkUpload = page === 'consultations' || page === 'followups';
+  const supportsManageModal = page === 'consultations' || page === 'followups';
 
   return (
     <div className="app-shell">
@@ -1340,6 +1521,8 @@ function App() {
                 setPage(id);
                 setQuery('');
                 setSavedNotice('');
+                setManageModal(false);
+                setSelectedManageIds([]);
                 setMobileNav(false);
               }}
             >
@@ -1382,7 +1565,7 @@ function App() {
             <span className="live">
               <i /> 실시간 동기화
             </span>
-            <button className="icon-btn" onClick={load} title="새로고침">
+            <button className="icon-btn" onClick={() => load(currentUserId)} title="새로고침">
               <RefreshCw size={17} />
             </button>
             <div className="avatar">{currentUserName.slice(0, 1)}</div>
@@ -1438,10 +1621,10 @@ function App() {
                       : page === 'attendance'
                       ? '참여자별 출결 내역을 기록하고 확인합니다.'
                       : page === 'consultations'
-                      ? '참여자별 사후연계 프로그램, 서류 제출상태 및 완료 여부를 관리합니다.'
+                      ? '내 계정에 저장된 사후연계 참여자, 프로그램, 서류 제출상태 및 완료 여부를 관리합니다.'
                       : page === 'managers'
                       ? '선임 매니저와 매니저 명단을 등록하고 열 기준으로 정렬합니다.'
-                      : '수료자 사후관리 대상 참여자와 1차·2차·3차 진행 일자를 관리합니다.'}
+                      : '내 계정에 저장된 수료자 사후관리 대상 참여자와 1차·2차·3차 진행 일자를 관리합니다.'}
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -1451,6 +1634,7 @@ function App() {
                       className="secondary"
                       onClick={() => {
                         setBulkText('');
+                        setBulkPreviewRows([]);
                         setBulkModal(true);
                       }}
                     >
@@ -1463,6 +1647,18 @@ function App() {
                       ? '참여자 등록'
                       : '새로 등록'}
                   </button>
+                  {supportsManageModal && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() => {
+                        setSelectedManageIds([]);
+                        setManageModal(true);
+                      }}
+                    >
+                      <SlidersHorizontal size={16} /> 관리
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1484,6 +1680,9 @@ function App() {
                 page={page}
                 rows={filtered}
                 participantName={participantName}
+                getLinkedProgram={(nameVal, fallbackProg) =>
+                  getLinkedProgramForParticipant(nameVal, fallbackProg)
+                }
                 onEdit={openEdit}
                 onDelete={remove}
                 managerSort={managerSort}
@@ -1514,6 +1713,110 @@ function App() {
         </div>
       </main>
 
+      {manageModal && supportsManageModal && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setManageModal(false);
+          }}
+        >
+          <div className="modal modal-wide">
+            <div className="modal-head">
+              <div>
+                <p className="eyebrow">BATCH MANAGE & EDIT</p>
+                <h2>{pageTitle} 목록 관리</h2>
+              </div>
+              <button className="icon-btn" onClick={() => setManageModal(false)}>
+                <X />
+              </button>
+            </div>
+
+            <div className="manage-toolbar">
+              <label className="table-checkbox-wrap">
+                <input
+                  type="checkbox"
+                  checked={
+                    filtered.length > 0 &&
+                    filtered.every((r) => selectedManageIds.includes(r.id))
+                  }
+                  onChange={() => toggleSelectAllManageRows(filtered)}
+                />
+                <span>전체 선택 ({selectedManageIds.length}건 선택됨)</span>
+              </label>
+
+              <button
+                type="button"
+                className="danger bulk-del-btn"
+                disabled={!selectedManageIds.length}
+                onClick={handleBulkDeleteSelected}
+              >
+                <Trash2 size={15} /> 선택 일괄 삭제
+              </button>
+            </div>
+
+            <div className="manage-list-wrap">
+              {filtered.length ? (
+                filtered.map((r) => {
+                  const isLinkage = page === 'consultations';
+                  const meta = isLinkage ? parseLinkageMeta(r) : null;
+                  const fu = !isLinkage ? parseFollowupDates(r) : null;
+                  const displayName = isLinkage
+                    ? meta.participant_name || participantName(r.participant_id)
+                    : fu.participant_name || participantName(r.participant_id);
+                  const cohortVal = isLinkage ? meta.cohort : fu.cohort;
+                  const progVal = isLinkage
+                    ? meta.program
+                    : getLinkedProgramForParticipant(displayName, fu.program);
+                  const subSummary = isLinkage
+                    ? `${meta.doc_status}${meta.note ? ` · ${meta.note}` : ''}`
+                    : `1차: ${fu.round1_date || '-'} / 2차: ${fu.round2_date || '-'} / 3차: ${
+                        fu.round3_date || '-'
+                      }${fu.note ? ` · ${fu.note}` : ''}`;
+
+                  return (
+                    <div key={r.id} className="manage-row-item">
+                      <label className="table-checkbox-wrap" style={{ flex: 1, minWidth: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedManageIds.includes(r.id)}
+                          onChange={() => toggleSelectManageRow(r.id)}
+                        />
+                        <div className="manage-row-text">
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <b>{displayName}</b>
+                            {cohortVal && <span className="pill">{cohortVal}</span>}
+                            {progVal && <span className="pill">{progVal}</span>}
+                          </div>
+                          <small className="muted">{subSummary}</small>
+                        </div>
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() => {
+                          setManageModal(false);
+                          openEdit(r, page);
+                        }}
+                      >
+                        <Pencil size={14} /> 수정
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <Empty text="관리할 참여자 데이터가 없습니다." />
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={() => setManageModal(false)}>
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {bulkModal && supportsBulkUpload && (
         <div
           className="modal-backdrop"
@@ -1537,14 +1840,14 @@ function App() {
                 <div className="wide">
                   <p className="muted" style={{ marginTop: 0 }}>
                     {page === 'consultations'
-                      ? '엑셀에서 행을 복사해 붙여넣거나 CSV 파일을 선택하세요. 열 순서: 이름, 기수, 사후연계 프로그램, 서류 제출상태(서류 제출전/서류 제출완료), 특이사항'
-                      : '엑셀에서 행을 복사해 붙여넣거나 CSV 파일을 선택하세요. 열 순서: 이름, 기수, 사후관리 1차(YYYY-MM-DD), 사후관리 2차(YYYY-MM-DD), 사후관리 3차(YYYY-MM-DD), 특이사항'}
+                      ? '엑셀에서 행을 복사해 붙여넣거나 파일을 선택하세요. 열 순서: 이름, 기수, 사후연계 프로그램, 서류 제출상태(서류 제출전/서류 제출완료), 특이사항'
+                      : '엑셀에서 행을 복사해 붙여넣거나 파일을 선택하세요. 열 순서: 이름, 기수, 사후관리 1차(YYYY-MM-DD), 사후관리 2차(YYYY-MM-DD), 사후관리 3차(YYYY-MM-DD), 특이사항'}
                   </p>
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <input
                       ref={excelFileInputRef}
                       type="file"
-                      accept=".csv,.tsv,.txt"
+                      accept=".xlsx,.xls,.csv,.tsv,.txt"
                       style={{ display: 'none' }}
                       onChange={handleExcelFileUpload}
                     />
@@ -1553,8 +1856,13 @@ function App() {
                       className="secondary"
                       onClick={() => excelFileInputRef.current?.click()}
                     >
-                      <FileSpreadsheet size={15} /> CSV/텍스트 파일 선택
+                      <FileSpreadsheet size={15} /> 엑셀 / CSV 파일 선택
                     </button>
+                    {bulkPreviewRows.length > 0 && (
+                      <span className="count">
+                        인식된 데이터: <b>{bulkPreviewRows.length}</b>행
+                      </span>
+                    )}
                   </div>
                   <textarea
                     rows="7"
@@ -1564,7 +1872,7 @@ function App() {
                         : '홍길동\t1기\t2026-11-10\t2026-11-24\t\t1·2차 완료\n김영희\t2기\t2026-11-12\t\t\t1차 진행'
                     }
                     value={bulkText}
-                    onChange={(e) => setBulkText(e.target.value)}
+                    onChange={(e) => syncBulkTextAndPreview(e.target.value)}
                     required
                   />
                 </div>
@@ -1651,29 +1959,16 @@ function App() {
 
                   <label className="wide">
                     기수
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                      <select
-                        style={{ flex: 1, minWidth: '140px' }}
-                        value={form.cohort || '1기'}
-                        onChange={(e) => setForm({ ...form, cohort: e.target.value })}
-                      >
-                        {cohortOptions.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        placeholder="새 기수 추가 (예: 5기)"
-                        style={{ width: '150px' }}
-                        value={newCohortInput}
-                        onChange={(e) => setNewCohortInput(e.target.value)}
-                      />
-                      <button type="button" className="secondary" onClick={handleAddNewCohort}>
-                        기수 추가
-                      </button>
-                    </div>
+                    <select
+                      value={form.cohort || '1기'}
+                      onChange={(e) => setForm({ ...form, cohort: e.target.value })}
+                    >
+                      {cohortOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
                   </label>
 
                   <label className="wide">
@@ -1704,7 +1999,7 @@ function App() {
                     </label>
                   )}
 
-                  <label>
+                  <label className="wide">
                     서류 제출상태
                     <select
                       value={form.doc_status || '서류 제출전'}
@@ -1716,18 +2011,6 @@ function App() {
                         </option>
                       ))}
                     </select>
-                  </label>
-
-                  <label style={{ justifyContent: 'flex-end' }}>
-                    완료 여부
-                    <div className="checkbox-inline-box">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(form.completed)}
-                        onChange={(e) => setForm({ ...form, completed: e.target.checked })}
-                      />
-                      <span>완료</span>
-                    </div>
                   </label>
 
                   <label className="wide">
@@ -1783,29 +2066,58 @@ function App() {
 
                   <label className="wide">
                     기수
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                      <select
-                        style={{ flex: 1, minWidth: '140px' }}
-                        value={form.cohort || '1기'}
-                        onChange={(e) => setForm({ ...form, cohort: e.target.value })}
-                      >
-                        {cohortOptions.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        placeholder="새 기수 추가 (예: 5기)"
-                        style={{ width: '150px' }}
-                        value={newCohortInput}
-                        onChange={(e) => setNewCohortInput(e.target.value)}
-                      />
-                      <button type="button" className="secondary" onClick={handleAddNewCohort}>
-                        기수 추가
-                      </button>
-                    </div>
+                    <select
+                      value={form.cohort || '1기'}
+                      onChange={(e) => setForm({ ...form, cohort: e.target.value })}
+                    >
+                      {cohortOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="wide">
+                    사후연계 프로그램 (구분용)
+                    <select
+                      value={form.program || ''}
+                      onChange={(e) => setForm({ ...form, program: e.target.value })}
+                    >
+                      <option value="">선택 안 함 (사후연계 등록 내역 자동 연동)</option>
+                      {LINKAGE_PROGRAM_PRESETS.map((prog) => (
+                        <option key={prog} value={prog}>
+                          {prog}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    사후관리 1차
+                    <input
+                      type="date"
+                      value={form.round1_date || ''}
+                      onChange={(e) => setForm({ ...form, round1_date: e.target.value })}
+                    />
+                  </label>
+
+                  <label>
+                    사후관리 2차
+                    <input
+                      type="date"
+                      value={form.round2_date || ''}
+                      onChange={(e) => setForm({ ...form, round2_date: e.target.value })}
+                    />
+                  </label>
+
+                  <label className="wide">
+                    사후관리 3차
+                    <input
+                      type="date"
+                      value={form.round3_date || ''}
+                      onChange={(e) => setForm({ ...form, round3_date: e.target.value })}
+                    />
                   </label>
 
                   <label className="wide">
@@ -3159,10 +3471,45 @@ function SortableHeader({ label, active, direction, onClick }) {
   );
 }
 
+function CohortPill({ cohort }) {
+  if (!cohort) return <span>-</span>;
+  const st = getCohortStyle(cohort);
+  return (
+    <span
+      className="type-color-badge"
+      style={{
+        backgroundColor: st.bg,
+        color: st.text,
+        borderColor: st.border
+      }}
+    >
+      {cohort}
+    </span>
+  );
+}
+
+function ProgramPill({ program }) {
+  if (!program) return <span className="muted">-</span>;
+  const st = getProgramStyle(program);
+  return (
+    <span
+      className="type-color-badge"
+      style={{
+        backgroundColor: st.bg,
+        color: st.text,
+        borderColor: st.border
+      }}
+    >
+      {program}
+    </span>
+  );
+}
+
 function DataTable({
   page,
   rows,
   participantName,
+  getLinkedProgram,
   onEdit,
   onDelete,
   managerSort,
@@ -3186,8 +3533,8 @@ function DataTable({
     ];
 
     return (
-      <div className="table-wrap">
-        <table>
+      <div className="table-wrap grid-lined-wrap">
+        <table className="grid-lined-table linkage-table">
           <thead>
             <tr>
               {cols.map(([key, label]) => (
@@ -3200,21 +3547,28 @@ function DataTable({
                   />
                 </th>
               ))}
-              <th>관리</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const meta = parseLinkageMeta(r);
               const displayName = meta.participant_name || participantName(r.participant_id);
+              const progStyle = getProgramStyle(meta.program);
               return (
                 <tr key={r.id}>
                   <td><b>{displayName}</b></td>
-                  <td>{meta.cohort || '-'}</td>
-                  <td>{meta.program || '-'}</td>
+                  <td>
+                    <CohortPill cohort={meta.cohort} />
+                  </td>
+                  <td style={{ backgroundColor: progStyle.bg }}>
+                    <ProgramPill program={meta.program} />
+                  </td>
                   <td>
                     <select
-                      className="inline-table-select"
+                      className={
+                        'inline-table-select doc-status-select ' +
+                        (meta.doc_status === '서류 제출완료' ? 'done' : 'pending')
+                      }
                       value={meta.doc_status}
                       onChange={(e) => onChangeLinkageDocStatus?.(r, e.target.value)}
                     >
@@ -3228,30 +3582,23 @@ function DataTable({
                   <td>
                     <span className="truncate">{meta.note || '-'}</span>
                   </td>
-                  <td>
-                    <label className="table-checkbox-wrap">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(meta.completed)}
-                        onChange={() => onToggleLinkageCompleted?.(r)}
-                      />
-                      <span>{meta.completed ? '완료' : '미완료'}</span>
-                    </label>
-                  </td>
-                  <td>
-                    <div className="row-actions">
-                      <button onClick={() => onEdit(r)}>수정</button>
-                      <button className="danger" onClick={() => onDelete(r.id)}>
-                        삭제
-                      </button>
-                    </div>
+                  <td style={{ textAlign: 'center' }}>
+                    <input
+                      type="checkbox"
+                      className="pure-complete-checkbox"
+                      aria-label={`${displayName} 완료 체크`}
+                      checked={Boolean(meta.completed)}
+                      onChange={() => onToggleLinkageCompleted?.(r)}
+                    />
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-        {!rows.length && <Empty text="등록된 사후연계 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />}
+        {!rows.length && (
+          <Empty text="등록된 사후연계 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />
+        )}
       </div>
     );
   }
@@ -3260,6 +3607,7 @@ function DataTable({
     const cols = [
       ['name', '이름'],
       ['cohort', '기수'],
+      ['program', '사후연계 프로그램'],
       ['round1', '사후관리 1차'],
       ['round2', '사후관리 2차'],
       ['round3', '사후관리 3차'],
@@ -3267,12 +3615,19 @@ function DataTable({
     ];
 
     return (
-      <div className="table-wrap">
-        <table>
+      <div className="table-wrap grid-lined-wrap">
+        <table className="grid-lined-table followup-table">
           <thead>
             <tr>
               {cols.map(([key, label]) => (
-                <th key={key}>
+                <th
+                  key={key}
+                  className={
+                    key === 'round1' || key === 'round2' || key === 'round3'
+                      ? 'followup-round-th'
+                      : ''
+                  }
+                >
                   <SortableHeader
                     label={label}
                     active={followupSort?.key === key}
@@ -3281,37 +3636,43 @@ function DataTable({
                   />
                 </th>
               ))}
-              <th>관리</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => {
               const fu = parseFollowupDates(r);
               const displayName = fu.participant_name || participantName(r.participant_id);
+              const progName = getLinkedProgram ? getLinkedProgram(displayName, fu.program) : fu.program;
+              const progStyle = getProgramStyle(progName);
               return (
                 <tr key={r.id}>
                   <td><b>{displayName}</b></td>
-                  <td>{fu.cohort || '-'}</td>
                   <td>
+                    <CohortPill cohort={fu.cohort} />
+                  </td>
+                  <td style={{ backgroundColor: progStyle.bg }}>
+                    <ProgramPill program={progName} />
+                  </td>
+                  <td className="followup-round-td">
                     <input
                       type="date"
-                      className="inline-date-input"
+                      className="inline-date-input followup-round-input"
                       value={fu.round1_date || ''}
                       onChange={(e) => onChangeFollowupRound?.(r, 'round1_date', e.target.value)}
                     />
                   </td>
-                  <td>
+                  <td className="followup-round-td">
                     <input
                       type="date"
-                      className="inline-date-input"
+                      className="inline-date-input followup-round-input"
                       value={fu.round2_date || ''}
                       onChange={(e) => onChangeFollowupRound?.(r, 'round2_date', e.target.value)}
                     />
                   </td>
-                  <td>
+                  <td className="followup-round-td">
                     <input
                       type="date"
-                      className="inline-date-input"
+                      className="inline-date-input followup-round-input"
                       value={fu.round3_date || ''}
                       onChange={(e) => onChangeFollowupRound?.(r, 'round3_date', e.target.value)}
                     />
@@ -3319,20 +3680,14 @@ function DataTable({
                   <td>
                     <span className="truncate">{fu.note || '-'}</span>
                   </td>
-                  <td>
-                    <div className="row-actions">
-                      <button onClick={() => onEdit(r)}>수정</button>
-                      <button className="danger" onClick={() => onDelete(r.id)}>
-                        삭제
-                      </button>
-                    </div>
-                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
-        {!rows.length && <Empty text="등록된 사후관리 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />}
+        {!rows.length && (
+          <Empty text="등록된 사후관리 참여자가 없습니다. 참여자 등록을 눌러 추가해 주세요." />
+        )}
       </div>
     );
   }
