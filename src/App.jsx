@@ -25,7 +25,8 @@ import {
   ArrowUp,
   ArrowDown,
   Trash2,
-  ArrowUpDown
+  ArrowUpDown,
+  ImagePlus
 } from 'lucide-react';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
@@ -43,6 +44,8 @@ const nav = [
   ['stats', '성과 통계', ChartNoAxesCombined],
   ['settings', '사이트 설정', Settings]
 ];
+
+const DEFAULT_MENU_ORDER = nav.filter(([id]) => id !== 'settings').map(([id]) => id);
 
 const SCHEDULE_CATEGORIES = ['프로그램', '사후관리', '행사', '기타'];
 const MANAGER_ROLES = ['선임 매니저', '매니저'];
@@ -145,6 +148,7 @@ const DEFAULT_DASHBOARD_CONFIG = {
       pinned: true
     }
   ],
+  banner_image: '',
   today_section_title: '오늘의 일정',
   today_section_sub: '당일 예정된 세부 일정 및 건수',
   week_section_title: '이번주 주요 일정',
@@ -165,6 +169,7 @@ const DEFAULT_SETTINGS = {
   welcome_subtitle: '청도지 사업단의 주요 현황을 한눈에 확인할 수 있습니다.',
   hidden_menus: [],
   custom_labels: {},
+  menu_order: DEFAULT_MENU_ORDER,
   dashboard_config: DEFAULT_DASHBOARD_CONFIG
 };
 
@@ -201,11 +206,11 @@ const formatKoreanDateShort = (isoStr) => {
 
 const formatTimeShort = (schedule) => {
   if (!schedule) return '';
-  if (schedule.all_day === true) return '종일(시간 미설정)';
+  if (schedule.all_day === true) return '';
   const isoStr = typeof schedule === 'string' ? schedule : schedule.start_at;
   if (!isoStr) return '';
   const s = String(isoStr);
-  if (!s.includes('T')) return '종일(시간 미설정)';
+  if (!s.includes('T')) return '';
   const part = s.split('T')[1];
   if (part && /^\d{2}:\d{2}/.test(part)) return part.slice(0, 5);
   const d = new Date(s);
@@ -216,11 +221,17 @@ const formatTimeShort = (schedule) => {
 const formatScheduleTimeRange = (schedule) => {
   if (!schedule) return '';
   if (schedule.all_day === true || !hasExplicitTime(schedule.start_at)) {
-    return '시간 미설정';
+    return '';
   }
   const startT = formatTimeShort(schedule.start_at);
   const endT = schedule.end_at && hasExplicitTime(schedule.end_at) ? formatTimeShort(schedule.end_at) : '';
   return startT ? (endT ? `${startT}~${endT}` : startT) : '';
+};
+
+const normalizeMenuOrder = (rawOrder) => {
+  const base = Array.isArray(rawOrder) ? rawOrder.filter((id) => DEFAULT_MENU_ORDER.includes(id)) : [];
+  const missing = DEFAULT_MENU_ORDER.filter((id) => !base.includes(id));
+  return [...base, ...missing];
 };
 
 const normalizeDashboardConfig = (raw) => {
@@ -245,6 +256,7 @@ const normalizeDashboardConfig = (raw) => {
   return {
     ...DEFAULT_DASHBOARD_CONFIG,
     ...incoming,
+    banner_image: typeof incoming.banner_image === 'string' ? incoming.banner_image : '',
     notices: Array.isArray(incoming.notices)
       ? incoming.notices.map((n, i) => ({
           id: n.id || 'n_' + i,
@@ -345,40 +357,39 @@ const fields = {
   ]
 };
 
+const stripRolePrefix = (rawName) =>
+  String(rawName || '')
+    .replace(/^\[(선임\s*매니저|매니저)\]\s*/g, '')
+    .trim();
+
 const extractScheduleManagers = (schedule) => {
   if (!schedule) return [];
   if (Array.isArray(schedule.managers)) {
     return schedule.managers
       .map((item) => (typeof item === 'string' ? item : item?.name))
-      .map((s) => (s || '').trim())
+      .map(stripRolePrefix)
       .filter(Boolean);
   }
   if (typeof schedule.managers === 'string' && schedule.managers.trim()) {
     try {
       const parsed = JSON.parse(schedule.managers);
       if (Array.isArray(parsed)) {
-        return parsed.map((v) => String(v).trim()).filter(Boolean);
+        return parsed.map((v) => stripRolePrefix(v)).filter(Boolean);
       }
     } catch (_) {
       return schedule.managers
         .split(',')
-        .map((s) => s.trim())
+        .map((s) => stripRolePrefix(s))
         .filter(Boolean);
     }
   }
   if (typeof schedule.manager === 'string' && schedule.manager.trim()) {
     return schedule.manager
       .split(',')
-      .map((s) => s.trim())
+      .map((s) => stripRolePrefix(s))
       .filter(Boolean);
   }
   return [];
-};
-
-const formatManagerLabel = (managerRow) => {
-  if (!managerRow) return '';
-  const roleTag = managerRow.role ? `[${managerRow.role}] ` : '';
-  return `${roleTag}${managerRow.name}`;
 };
 
 function App() {
@@ -412,12 +423,15 @@ function App() {
       .maybeSingle();
 
     if (!settingsError && data) {
+      const normalizedDash = normalizeDashboardConfig(data.dashboard_config);
+      const savedOrder = data.menu_order || normalizedDash.menu_order;
       setSiteConfig({
         ...DEFAULT_SETTINGS,
         ...data,
         hidden_menus: Array.isArray(data.hidden_menus) ? data.hidden_menus : [],
         custom_labels: data.custom_labels && typeof data.custom_labels === 'object' ? data.custom_labels : {},
-        dashboard_config: normalizeDashboardConfig(data.dashboard_config)
+        menu_order: normalizeMenuOrder(savedOrder),
+        dashboard_config: normalizedDash
       });
     }
   };
@@ -495,19 +509,34 @@ function App() {
     if (!supabase) return;
     setError('');
     setSavedNotice('');
-    const payload = {
-      ...nextConfig,
+    const orderedMenus = normalizeMenuOrder(nextConfig.menu_order);
+    const mergedDash = {
+      ...normalizeDashboardConfig(nextConfig.dashboard_config),
+      menu_order: orderedMenus
+    };
+    const dbPayload = {
       id: 'default',
+      brand_title: nextConfig.brand_title,
+      brand_subtitle: nextConfig.brand_subtitle,
+      welcome_title: nextConfig.welcome_title,
+      welcome_subtitle: nextConfig.welcome_subtitle,
+      hidden_menus: nextConfig.hidden_menus || [],
+      custom_labels: nextConfig.custom_labels || {},
+      dashboard_config: mergedDash,
       updated_at: new Date().toISOString()
     };
+
     const { error: saveError } = await supabase
       .from('site_settings')
-      .upsert(payload, { onConflict: 'id' });
+      .upsert(dbPayload, { onConflict: 'id' });
     if (saveError) {
       setError(saveError.message);
       return;
     }
-    setSiteConfig(payload);
+    setSiteConfig({
+      ...dbPayload,
+      menu_order: orderedMenus
+    });
     setSavedNotice('설정이 저장되었습니다.');
   };
 
@@ -621,7 +650,9 @@ function App() {
         payload.expected_count !== undefined && payload.expected_count !== ''
           ? Number(payload.expected_count) || 0
           : 0;
-      payload.managers = Array.isArray(payload.managers) ? payload.managers : [];
+      payload.managers = Array.isArray(payload.managers)
+        ? payload.managers.map(stripRolePrefix).filter(Boolean)
+        : [];
 
       delete payload.timeEnabled;
       delete payload.startDate;
@@ -666,10 +697,11 @@ function App() {
     await load();
   };
 
-  const toggleFormManager = (managerDisplayName) => {
-    const current = Array.isArray(form.managers) ? form.managers : [];
-    const exists = current.includes(managerDisplayName);
-    const next = exists ? current.filter((m) => m !== managerDisplayName) : [...current, managerDisplayName];
+  const toggleFormManager = (managerName) => {
+    const cleanName = stripRolePrefix(managerName);
+    const current = Array.isArray(form.managers) ? form.managers.map(stripRolePrefix) : [];
+    const exists = current.includes(cleanName);
+    const next = exists ? current.filter((m) => m !== cleanName) : [...current, cleanName];
     setForm({ ...form, managers: next });
   };
 
@@ -686,9 +718,16 @@ function App() {
 
   const getMenuLabel = (id, defaultLabel) => siteConfig.custom_labels?.[id]?.trim() || defaultLabel;
 
+  const orderedNav = useMemo(() => {
+    const order = normalizeMenuOrder(siteConfig.menu_order);
+    const navMap = Object.fromEntries(nav.map((item) => [item[0], item]));
+    const sortedMain = order.map((id) => navMap[id]).filter(Boolean);
+    return [...sortedMain, navMap.settings];
+  }, [siteConfig.menu_order]);
+
   const visibleNav = useMemo(
-    () => nav.filter(([id]) => id === 'settings' || !siteConfig.hidden_menus?.includes(id)),
-    [siteConfig.hidden_menus]
+    () => orderedNav.filter(([id]) => id === 'settings' || !siteConfig.hidden_menus?.includes(id)),
+    [orderedNav, siteConfig.hidden_menus]
   );
 
   useEffect(() => {
@@ -696,6 +735,17 @@ function App() {
       setPage('dashboard');
     }
   }, [page, siteConfig.hidden_menus]);
+
+  const groupedManagers = useMemo(() => {
+    const list = rows.managers || [];
+    const seniors = list
+      .filter((m) => m.role === '선임 매니저')
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    const juniors = list
+      .filter((m) => m.role !== '선임 매니저')
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko'));
+    return { seniors, juniors };
+  }, [rows.managers]);
 
   const filtered = useMemo(() => {
     const data = rows[tableByPage[page]] || [];
@@ -724,6 +774,22 @@ function App() {
 
   const rawNavItem = nav.find((n) => n[0] === page);
   const pageTitle = rawNavItem ? getMenuLabel(rawNavItem[0], rawNavItem[1]) : '대시보드';
+
+  const renderManagerPickButton = (m) => {
+    const cleanName = stripRolePrefix(m.name);
+    const selectedList = Array.isArray(form.managers) ? form.managers.map(stripRolePrefix) : [];
+    const checked = selectedList.includes(cleanName);
+    return (
+      <button
+        key={m.id || cleanName}
+        type="button"
+        className={'manager-pick-btn ' + (checked ? 'selected' : '')}
+        onClick={() => toggleFormManager(cleanName)}
+      >
+        <span>{cleanName}</span>
+      </button>
+    );
+  };
 
   return (
     <div className="app-shell">
@@ -930,7 +996,7 @@ function App() {
                                 setForm({ ...form, timeEnabled: e.target.checked })
                               }
                             />
-                            <span>시간 설정 사용 (체크 해제 시 날짜만 저장)</span>
+                            <span>시간 설정 사용 (체크 해제 시 날짜만 표시)</span>
                           </label>
 
                           <div className="datetime-row">
@@ -1008,31 +1074,28 @@ function App() {
                       ) : type === 'multi_manager' ? (
                         <div className="manager-selector-box">
                           {rows.managers && rows.managers.length > 0 ? (
-                            <div className="manager-chip-grid">
-                              {rows.managers.map((m) => {
-                                const displayLabel = formatManagerLabel(m);
-                                const selectedList = Array.isArray(form.managers) ? form.managers : [];
-                                const checked =
-                                  selectedList.includes(displayLabel) || selectedList.includes(m.name);
-                                const isSenior = m.role === '선임 매니저';
-                                return (
-                                  <button
-                                    key={m.id || displayLabel}
-                                    type="button"
-                                    className={
-                                      'manager-pick-btn ' +
-                                      (checked ? 'selected ' : '') +
-                                      (isSenior ? 'senior' : 'junior')
-                                    }
-                                    onClick={() => toggleFormManager(displayLabel)}
-                                  >
-                                    <span className="mgr-role-pill">
-                                      {m.role || '매니저'}
-                                    </span>
-                                    <span>{m.name}</span>
-                                  </button>
-                                );
-                              })}
+                            <div className="manager-role-groups">
+                              <div className="manager-role-group">
+                                <span className="manager-group-label senior">선임 매니저</span>
+                                <div className="manager-chip-grid">
+                                  {groupedManagers.seniors.length > 0 ? (
+                                    groupedManagers.seniors.map(renderManagerPickButton)
+                                  ) : (
+                                    <span className="muted tiny">등록된 선임 매니저 없음</span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="manager-role-group">
+                                <span className="manager-group-label junior">매니저</span>
+                                <div className="manager-chip-grid">
+                                  {groupedManagers.juniors.length > 0 ? (
+                                    groupedManagers.juniors.map(renderManagerPickButton)
+                                  ) : (
+                                    <span className="muted tiny">등록된 매니저 없음</span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
                           ) : (
                             <p className="muted" style={{ margin: 0 }}>
@@ -1041,7 +1104,7 @@ function App() {
                           )}
                           {Array.isArray(form.managers) && form.managers.length > 0 && (
                             <div className="selected-managers-summary">
-                              선택된 담당자: <b>{form.managers.join(', ')}</b>
+                              선택된 담당자: <b>{form.managers.map(stripRolePrefix).join(', ')}</b>
                             </div>
                           )}
                         </div>
@@ -1112,6 +1175,28 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
     setDraft(normalizeDashboardConfig(dashConfig));
   }, [dashConfig]);
 
+  const handleBannerFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxWidth = 1400;
+        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+        setDraft((prev) => ({ ...prev, banner_image: compressed }));
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  };
+
   const addNotice = () => {
     const next = [
       ...(draft.notices || []),
@@ -1177,6 +1262,7 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
   };
 
   const subTabs = [
+    ['banner', '0. 상단 배너 이미지'],
     ['notices', '1. 공지·전달사항'],
     ['today', '2. 오늘의 일정'],
     ['week', '3. 이번주 주요 일정'],
@@ -1189,7 +1275,7 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
       <div className="panel-head">
         <div>
           <h2>대시보드 항목별 개별 설정</h2>
-          <p>수정할 항목 탭을 선택해 문구·순서·고정·기준값을 개별적으로 관리할 수 있습니다.</p>
+          <p>수정할 항목 탭을 선택해 배너 이미지·문구·순서·고정·기준값을 개별적으로 관리할 수 있습니다.</p>
         </div>
         <button type="submit" className="primary">변경사항 저장</button>
       </div>
@@ -1206,6 +1292,39 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
           </button>
         ))}
       </div>
+
+      {activeCardTab === 'banner' && (
+        <div className="form-grid">
+          <label className="wide">
+            TEAM OVERVIEW 상단 카드 배경/배너 이미지 업로드
+            <input type="file" accept="image/*" onChange={handleBannerFileChange} />
+          </label>
+          <label className="wide">
+            또는 이미지 주소(URL) 직접 입력
+            <input
+              type="text"
+              placeholder="https://example.com/banner.jpg"
+              value={draft.banner_image || ''}
+              onChange={(e) => setDraft({ ...draft, banner_image: e.target.value })}
+            />
+          </label>
+          {draft.banner_image && (
+            <div className="wide banner-preview-box">
+              <img src={draft.banner_image} alt="대시보드 배너 미리보기" />
+              <button
+                type="button"
+                className="danger"
+                onClick={() => setDraft({ ...draft, banner_image: '' })}
+              >
+                이미지 제거
+              </button>
+            </div>
+          )}
+          <p className="muted wide">
+            ※ 이미지를 설정하면 대시보드 최상단 TEAM OVERVIEW 큰 네모칸의 배경에 적용됩니다.
+          </p>
+        </div>
+      )}
 
       {activeCardTab === 'notices' && (
         <div>
@@ -1296,9 +1415,6 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
               onChange={(e) => setDraft({ ...draft, today_section_sub: e.target.value })}
             />
           </label>
-          <p className="muted wide">
-            ※ 오늘 날짜에 등록된 일정이 자동으로 집계되며, 우측 상단에 강조된 건수 배지가 함께 표시됩니다.
-          </p>
         </div>
       )}
 
@@ -1320,9 +1436,6 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
               onChange={(e) => setDraft({ ...draft, week_section_sub: e.target.value })}
             />
           </label>
-          <p className="muted wide">
-            ※ 이번주 주요 일정에서는 왼쪽 배지에 구분명(예: [사후관리], [프로그램])이 표시되고, 날짜·시간·장소·설명은 세부사항 영역에 함께 출력됩니다.
-          </p>
         </div>
       )}
 
@@ -1353,9 +1466,6 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
               onChange={(e) => setDraft({ ...draft, followup_schedule_keyword: e.target.value })}
             />
           </label>
-          <p className="muted wide">
-            ※ 일정 관리에서 구분을 '사후관리'로 등록하고 참여 인원을 입력하면 전체 사후관리 참여 인원이 자동으로 합산됩니다. (사후관리 메뉴의 '참여' 기록도 함께 참고할 수 있습니다.)
-          </p>
         </div>
       )}
 
@@ -1453,11 +1563,21 @@ function DashboardEditForm({ dashConfig, onSave, notice }) {
 }
 
 function SiteSettingsPage({ config, onSave, notice }) {
-  const [draft, setDraft] = useState(config);
+  const [draft, setDraft] = useState(() => ({
+    ...config,
+    menu_order: normalizeMenuOrder(config.menu_order)
+  }));
   const [tab, setTab] = useState('sidebar');
-  useEffect(() => setDraft(config), [config]);
 
-  const editableMenus = nav.filter(([id]) => id !== 'settings');
+  useEffect(() => {
+    setDraft({
+      ...config,
+      menu_order: normalizeMenuOrder(config.menu_order)
+    });
+  }, [config]);
+
+  const navMap = Object.fromEntries(nav.map((item) => [item[0], item[1]]));
+  const currentOrder = normalizeMenuOrder(draft.menu_order);
 
   const toggleHidden = (id) => {
     const exists = draft.hidden_menus.includes(id);
@@ -1474,9 +1594,20 @@ function SiteSettingsPage({ config, onSave, notice }) {
     });
   };
 
+  const moveMenu = (idx, dir) => {
+    const target = idx + dir;
+    if (target < 0 || target >= currentOrder.length) return;
+    const next = [...currentOrder];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setDraft({ ...draft, menu_order: next });
+  };
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSave(draft);
+    onSave({
+      ...draft,
+      menu_order: currentOrder
+    });
   };
 
   return (
@@ -1485,7 +1616,7 @@ function SiteSettingsPage({ config, onSave, notice }) {
         <div>
           <p className="eyebrow">SITE CUSTOMIZATION</p>
           <h1>사이트 설정</h1>
-          <p className="muted">사이드바 메뉴와 대시보드 표시 항목을 탭별로 직접 수정합니다.</p>
+          <p className="muted">사이드바 메뉴 이름·순서와 대시보드 표시 항목을 탭별로 직접 수정합니다.</p>
         </div>
         <div className="month-nav">
           <button
@@ -1561,16 +1692,36 @@ function SiteSettingsPage({ config, onSave, notice }) {
 
           <div className="panel-head" style={{ marginTop: '24px' }}>
             <div>
-              <h2>메뉴 이름 및 노출 설정</h2>
-              <p>원하는 메뉴명을 입력하거나 사용하지 않는 메뉴를 숨길 수 있습니다.</p>
+              <h2>메뉴 이름·순서 및 노출 설정</h2>
+              <p>위·아래 화살표로 사이드바 순서를 변경하고, 원하는 메뉴명을 입력하거나 숨길 수 있습니다.</p>
             </div>
           </div>
 
           <div className="form-grid">
-            {editableMenus.map(([id, defaultLabel]) => {
+            {currentOrder.map((id, idx) => {
+              const defaultLabel = navMap[id] || id;
               const isHidden = draft.hidden_menus.includes(id);
               return (
-                <div key={id} className="event-row">
+                <div key={id} className="event-row wide" style={{ gap: '12px' }}>
+                  <div className="order-btns" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span className="order-badge">#{idx + 1}</span>
+                    <button
+                      type="button"
+                      disabled={idx === 0}
+                      onClick={() => moveMenu(idx, -1)}
+                      title="위로 이동"
+                    >
+                      <ArrowUp size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={idx === currentOrder.length - 1}
+                      onClick={() => moveMenu(idx, 1)}
+                      title="아래로 이동"
+                    >
+                      <ArrowDown size={14} />
+                    </button>
+                  </div>
                   <div className="event-info" style={{ flex: 1 }}>
                     <b>기본 메뉴: {defaultLabel}</b>
                     <input
@@ -1599,9 +1750,16 @@ function SiteSettingsPage({ config, onSave, notice }) {
             <button
               type="button"
               className="secondary"
-              onClick={() => setDraft({ ...config, hidden_menus: [], custom_labels: {} })}
+              onClick={() =>
+                setDraft({
+                  ...config,
+                  hidden_menus: [],
+                  custom_labels: {},
+                  menu_order: DEFAULT_MENU_ORDER
+                })
+              }
             >
-              메뉴 커스텀 초기화
+              메뉴 이름·순서 초기화
             </button>
             <button type="submit" className="primary">설정 저장</button>
           </div>
@@ -1685,16 +1843,66 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
   const remainingFollowups = Math.max(targetFollowups - followupSchedules.length, 0);
 
   const activeRecruit = dashConfig.recruit_cohorts?.[selectedCohort] || { short: '', mid: '', long: '' };
+  const hasBannerImage = Boolean(dashConfig.banner_image);
+
+  const handleQuickBannerUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxWidth = 1400;
+        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+        onSaveSettings({
+          ...siteConfig,
+          dashboard_config: {
+            ...dashConfig,
+            banner_image: compressed
+          }
+        });
+      };
+      img.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  };
 
   return (
     <>
-      <div className="welcome">
+      <div
+        className={'welcome ' + (hasBannerImage ? 'has-banner-image' : '')}
+        style={
+          hasBannerImage
+            ? {
+                backgroundImage: `linear-gradient(90deg, rgba(15, 23, 42, 0.78) 0%, rgba(15, 23, 42, 0.45) 60%, rgba(15, 23, 42, 0.25) 100%), url(${dashConfig.banner_image})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center'
+              }
+            : undefined
+        }
+      >
         <div>
           <p className="eyebrow">TEAM OVERVIEW</p>
           <h1>{siteConfig?.welcome_title || '안녕하세요, 오늘도 함께 시작해요.'}</h1>
           <p>{siteConfig?.welcome_subtitle || '청도지 사업단의 주요 현황을 한눈에 확인할 수 있습니다.'}</p>
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="secondary banner-upload-btn" title="배너 이미지 변경">
+            <ImagePlus size={15} />
+            <span>이미지 넣기</span>
+            <input
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleQuickBannerUpload}
+            />
+          </label>
           <button
             type="button"
             className={dashTab === 'view' ? 'primary' : 'secondary'}
@@ -1760,12 +1968,12 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
           </section>
 
           <div className="dashboard-grid" style={{ marginBottom: '18px' }}>
-            <section className="panel dash-card accent-today today-highlight-panel">
+            <section className="panel dash-card accent-today">
               <div className="panel-head dash-card-head">
                 <div>
                   <div className="title-with-count">
                     <h2>{dashConfig.today_section_title || '오늘의 일정'}</h2>
-                    <span className="count-highlight today-badge">총 {todaySchedules.length}건</span>
+                    <span className="count-highlight">총 {todaySchedules.length}건</span>
                   </div>
                   <p>{dashConfig.today_section_sub || `${today} 기준 예정 일정`}</p>
                 </div>
@@ -1778,9 +1986,9 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   const mgrs = extractScheduleManagers(s);
                   const timeText = formatScheduleTimeRange(s);
                   return (
-                    <div className="dash-item-box today-schedule-highlight" key={s.id}>
+                    <div className="dash-item-box today-subtle-card" key={s.id}>
                       <div className="dash-item-title-row">
-                        <span className="today-chip">오늘</span>
+                        <span className="today-subtle-badge">오늘</span>
                         <span className="program-tag">[{s.category || '일정'}]</span>
                         <b className="dash-item-title">{s.title}</b>
                         {Number(s.expected_count) > 0 && (
@@ -1789,9 +1997,15 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                       </div>
                       <div className="dash-item-body">
                         <span className="meta-line">
-                          <Clock3 size={13} /> {timeText}
-                          {s.location ? ` · 장소: ${s.location}` : ''}
-                          {mgrs.length ? ` · 담당: ${mgrs.join(', ')}` : ''}
+                          {timeText && (
+                            <>
+                              <Clock3 size={13} /> {timeText}
+                            </>
+                          )}
+                          {s.location ? `${timeText ? ' · ' : ''}장소: ${s.location}` : ''}
+                          {mgrs.length
+                            ? `${timeText || s.location ? ' · ' : ''}담당: ${mgrs.join(', ')}`
+                            : ''}
                         </span>
                         {s.description && <p className="detail-desc">{s.description}</p>}
                       </div>
@@ -1825,13 +2039,13 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   const timeText = formatScheduleTimeRange(s);
                   return (
                     <div
-                      className={'week-item-card ' + (isTodayItem ? 'today-schedule-highlight' : '')}
+                      className={'week-item-card ' + (isTodayItem ? 'today-subtle-card' : '')}
                       key={s.id}
                     >
                       <div className="program-badge-box">[{s.category || '프로그램'}]</div>
                       <div className="week-item-content">
                         <div className="dash-item-title-row">
-                          {isTodayItem && <span className="today-chip">오늘</span>}
+                          {isTodayItem && <span className="today-subtle-badge">오늘</span>}
                           <b className="dash-item-title">{s.title}</b>
                           {Number(s.expected_count) > 0 && (
                             <span className="pill">{s.expected_count}명</span>
@@ -1839,8 +2053,8 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                         </div>
                         <div className="dash-item-body">
                           <span className="meta-line">
-                            <CalendarDays size={13} /> {formatKoreanDateShort(s.start_at)}{' '}
-                            {timeText}
+                            <CalendarDays size={13} /> {formatKoreanDateShort(s.start_at)}
+                            {timeText ? ` ${timeText}` : ''}
                             {s.location ? ` · ${s.location}` : ''}
                             {mgrs.length ? ` · 담당: ${mgrs.join(', ')}` : ''}
                           </span>
@@ -2073,10 +2287,7 @@ function DataTable({
 function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
   const year = month.getFullYear(),
     m = month.getMonth(),
-    first = new Date(year, m, 1),
-    days = new Date(year, m + 1, 0).getDate(),
-    offset = first.getDay();
-  const cells = Array.from({ length: Math.ceil((offset + days) / 7) * 7 }, (_, i) => i - offset + 1);
+    days = new Date(year, m + 1, 0).getDate();
   const items = rows.schedules || [];
 
   const getDateStr = (d) =>
@@ -2094,7 +2305,34 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
       .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
   };
 
-  const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+  // 월·토를 제외한 평일(화, 수, 목, 금) 4열 달력 구성
+  const weekdays = ['화', '수', '목', '금'];
+  const firstWeekdayIndex = useMemo(() => {
+    for (let d = 1; d <= days; d += 1) {
+      const dow = new Date(year, m, d).getDay();
+      if (dow >= 2 && dow <= 5) {
+        return dow - 2; // 0: 화, 1: 수, 2: 목, 3: 금
+      }
+    }
+    return 0;
+  }, [year, m, days]);
+
+  const calendarCells = useMemo(() => {
+    const list = [];
+    for (let i = 0; i < firstWeekdayIndex; i += 1) {
+      list.push(null);
+    }
+    for (let d = 1; d <= days; d += 1) {
+      const dow = new Date(year, m, d).getDay();
+      if (dow >= 2 && dow <= 5) {
+        list.push(d);
+      }
+    }
+    while (list.length % 4 !== 0) {
+      list.push(null);
+    }
+    return list;
+  }, [year, m, days, firstWeekdayIndex]);
 
   return (
     <>
@@ -2117,7 +2355,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
             <h2>
               {year}년 {m + 1}월
             </h2>
-            <p>구분별 색상 및 세부 정보 포함 월간 일정 캘린더 (일~토)</p>
+            <p>평일 집중 월간 일정 캘린더 (화·수·목·금)</p>
           </div>
           <div className="calendar-legend">
             {SCHEDULE_CATEGORIES.map((cat) => {
@@ -2148,22 +2386,14 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
           </div>
         </div>
 
-        <div className="calendar-grid">
-          {weekdays.map((d, idx) => (
-            <div
-              className={
-                'weekday ' + (idx === 0 ? 'sun-header' : idx === 6 ? 'sat-header' : '')
-              }
-              key={d}
-            >
+        <div className="calendar-grid four-col-weekdays">
+          {weekdays.map((d) => (
+            <div className="weekday" key={d}>
               {d}
             </div>
           ))}
-          {cells.map((d, i) => {
-            const colIndex = i % 7;
-            const isSunday = colIndex === 0;
-            const isSaturday = colIndex === 6;
-            const isValidDay = d > 0 && d <= days;
+          {calendarCells.map((d, i) => {
+            const isValidDay = typeof d === 'number' && d > 0 && d <= days;
             const dateStr = isValidDay ? getDateStr(d) : '';
             const events = isValidDay ? dayItems(d) : [];
             const isTodayCell =
@@ -2174,9 +2404,8 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
 
             const cellClasses = [
               'calendar-cell',
-              !isValidDay ? 'outside' : 'clickable-cell',
-              isSunday ? 'sun-cell' : '',
-              isSaturday ? 'sat-cell' : ''
+              'weekday-large-cell',
+              !isValidDay ? 'outside' : 'clickable-cell'
             ]
               .filter(Boolean)
               .join(' ');
@@ -2190,15 +2419,8 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
                 }}
               >
                 <div className="calendar-cell-top">
-                  <span
-                    className={
-                      'day-number ' +
-                      (isTodayCell ? 'today ' : '') +
-                      (isSunday ? 'sun-num ' : '') +
-                      (isSaturday ? 'sat-num' : '')
-                    }
-                  >
-                    {isValidDay ? d : ''}
+                  <span className={'day-number ' + (isTodayCell ? 'today' : '')}>
+                    {isValidDay ? `${d}일` : ''}
                   </span>
                   {isValidDay && (
                     <button
