@@ -25,8 +25,7 @@ import {
   ArrowUp,
   ArrowDown,
   Trash2,
-  ArrowUpDown,
-  ImagePlus
+  ArrowUpDown
 } from 'lucide-react';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
@@ -1845,34 +1844,6 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
   const activeRecruit = dashConfig.recruit_cohorts?.[selectedCohort] || { short: '', mid: '', long: '' };
   const hasBannerImage = Boolean(dashConfig.banner_image);
 
-  const handleQuickBannerUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const maxWidth = 1400;
-        const scale = img.width > maxWidth ? maxWidth / img.width : 1;
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.85);
-        onSaveSettings({
-          ...siteConfig,
-          dashboard_config: {
-            ...dashConfig,
-            banner_image: compressed
-          }
-        });
-      };
-      img.src = String(reader.result || '');
-    };
-    reader.readAsDataURL(file);
-  };
-
   return (
     <>
       <div
@@ -1893,16 +1864,6 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
           <p>{siteConfig?.welcome_subtitle || '청도지 사업단의 주요 현황을 한눈에 확인할 수 있습니다.'}</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label className="secondary banner-upload-btn" title="배너 이미지 변경">
-            <ImagePlus size={15} />
-            <span>이미지 넣기</span>
-            <input
-              type="file"
-              accept="image/*"
-              style={{ display: 'none' }}
-              onChange={handleQuickBannerUpload}
-            />
-          </label>
           <button
             type="button"
             className={dashTab === 'view' ? 'primary' : 'secondary'}
@@ -1986,9 +1947,9 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   const mgrs = extractScheduleManagers(s);
                   const timeText = formatScheduleTimeRange(s);
                   return (
-                    <div className="dash-item-box today-subtle-card" key={s.id}>
+                    <div className="dash-item-box is-pinned" key={s.id}>
                       <div className="dash-item-title-row">
-                        <span className="today-subtle-badge">오늘</span>
+                        <span className="pin-badge">오늘</span>
                         <span className="program-tag">[{s.category || '일정'}]</span>
                         <b className="dash-item-title">{s.title}</b>
                         {Number(s.expected_count) > 0 && (
@@ -2039,13 +2000,13 @@ function Dashboard({ rows, siteConfig, notice, onSaveSettings, onNavigate }) {
                   const timeText = formatScheduleTimeRange(s);
                   return (
                     <div
-                      className={'week-item-card ' + (isTodayItem ? 'today-subtle-card' : '')}
+                      className={'week-item-card ' + (isTodayItem ? 'is-pinned' : '')}
                       key={s.id}
                     >
                       <div className="program-badge-box">[{s.category || '프로그램'}]</div>
                       <div className="week-item-content">
                         <div className="dash-item-title-row">
-                          {isTodayItem && <span className="today-subtle-badge">오늘</span>}
+                          {isTodayItem && <span className="pin-badge">오늘</span>}
                           <b className="dash-item-title">{s.title}</b>
                           {Number(s.expected_count) > 0 && (
                             <span className="pill">{s.expected_count}명</span>
@@ -2305,13 +2266,13 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
       .sort((a, b) => String(a.start_at || '').localeCompare(String(b.start_at || '')));
   };
 
-  // 월·토를 제외한 평일(화, 수, 목, 금) 4열 달력 구성
-  const weekdays = ['화', '수', '목', '금'];
+  // 토·일을 제외한 평일(월, 화, 수, 목, 금) 5열 달력 구성
+  const weekdays = ['월', '화', '수', '목', '금'];
   const firstWeekdayIndex = useMemo(() => {
     for (let d = 1; d <= days; d += 1) {
       const dow = new Date(year, m, d).getDay();
-      if (dow >= 2 && dow <= 5) {
-        return dow - 2; // 0: 화, 1: 수, 2: 목, 3: 금
+      if (dow >= 1 && dow <= 5) {
+        return dow - 1; // 0: 월, 1: 화, 2: 수, 3: 목, 4: 금
       }
     }
     return 0;
@@ -2324,11 +2285,11 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
     }
     for (let d = 1; d <= days; d += 1) {
       const dow = new Date(year, m, d).getDay();
-      if (dow >= 2 && dow <= 5) {
+      if (dow >= 1 && dow <= 5) {
         list.push(d);
       }
     }
-    while (list.length % 4 !== 0) {
+    while (list.length % 5 !== 0) {
       list.push(null);
     }
     return list;
@@ -2355,7 +2316,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
             <h2>
               {year}년 {m + 1}월
             </h2>
-            <p>평일 집중 월간 일정 캘린더 (화·수·목·금)</p>
+            <p>월간 일정 캘린더</p>
           </div>
           <div className="calendar-legend">
             {SCHEDULE_CATEGORIES.map((cat) => {
@@ -2386,7 +2347,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
           </div>
         </div>
 
-        <div className="calendar-grid four-col-weekdays">
+        <div className="calendar-grid five-col-weekdays">
           {weekdays.map((d) => (
             <div className="weekday" key={d}>
               {d}
@@ -2420,7 +2381,7 @@ function CalendarPage({ rows, month, setMonth, onAdd, onAddOnDate, onEdit }) {
               >
                 <div className="calendar-cell-top">
                   <span className={'day-number ' + (isTodayCell ? 'today' : '')}>
-                    {isValidDay ? `${d}일` : ''}
+                    {isValidDay ? d : ''}
                   </span>
                   {isValidDay && (
                     <button
